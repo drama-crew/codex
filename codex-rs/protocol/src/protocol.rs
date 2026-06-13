@@ -432,6 +432,12 @@ pub struct ConversationSpeechParams {
     pub text: String,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ConversationHandoffAppendParams {
+    pub handoff_id: String,
+    pub output_text: String,
+}
+
 /// Persistent thread-settings overrides that can be applied before user input or
 /// on their own.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -527,6 +533,9 @@ pub enum Op {
 
     /// Send text input to the running realtime conversation stream.
     RealtimeConversationText(ConversationTextParams),
+
+    /// Append an exact handoff output to a running V1 realtime conversation stream.
+    RealtimeConversationHandoffAppend(ConversationHandoffAppendParams),
 
     /// Append silent context to the running realtime conversation stream.
     RealtimeConversationSilentContext(ConversationSilentContextParams),
@@ -787,6 +796,7 @@ impl Op {
             Self::RealtimeConversationStart(_) => "realtime_conversation_start",
             Self::RealtimeConversationAudio(_) => "realtime_conversation_audio",
             Self::RealtimeConversationText(_) => "realtime_conversation_text",
+            Self::RealtimeConversationHandoffAppend(_) => "realtime_conversation_handoff_append",
             Self::RealtimeConversationSilentContext(_) => "realtime_conversation_silent_context",
             Self::RealtimeConversationSpeech(_) => "realtime_conversation_speech",
             Self::RealtimeConversationClose => "realtime_conversation_close",

@@ -1316,6 +1316,11 @@ impl MessageProcessor {
                     .thread_realtime_append_text(&request_id, params)
                     .await
             }
+            ClientRequest::ThreadRealtimeAppendHandoff { params, .. } => {
+                self.turn_processor
+                    .thread_realtime_append_handoff(&request_id, params)
+                    .await
+            }
             ClientRequest::ThreadRealtimeAppendSilentContext { params, .. } => {
                 self.turn_processor
                     .thread_realtime_append_silent_context(&request_id, params)

@@ -32,6 +32,7 @@ use codex_protocol::error::CodexErr;
 use codex_protocol::error::Result as CodexResult;
 use codex_protocol::protocol::CodexErrorInfo;
 use codex_protocol::protocol::ConversationAudioParams;
+use codex_protocol::protocol::ConversationHandoffAppendParams;
 use codex_protocol::protocol::ConversationSilentContextParams;
 use codex_protocol::protocol::ConversationSpeechParams;
 use codex_protocol::protocol::ConversationStartParams;
@@ -65,7 +66,7 @@ use tracing::info;
 use tracing::warn;
 
 const AUDIO_IN_QUEUE_CAPACITY: usize = 256;
-const TEXT_IN_QUEUE_CAPACITY: usize = 64;
+const CLIENT_INPUT_QUEUE_CAPACITY: usize = 64;
 const HANDOFF_OUT_QUEUE_CAPACITY: usize = 64;
 const OUTPUT_EVENTS_QUEUE_CAPACITY: usize = 256;
 const REALTIME_STARTUP_CONTEXT_TOKEN_BUDGET: usize = 5_300;
@@ -142,6 +143,11 @@ enum HandoffOutput {
     },
 }
 
+enum RealtimeClientInput {
+    Text(ConversationTextParams),
+    HandoffAppend(ConversationHandoffAppendParams),
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct OutputAudioState {
     item_id: String,
@@ -213,7 +219,7 @@ impl RealtimeResponseCreateQueue {
 struct RealtimeInputTask {
     writer: RealtimeWebsocketWriter,
     events: RealtimeWebsocketEvents,
-    text_rx: Receiver<ConversationTextParams>,
+    client_input_rx: Receiver<RealtimeClientInput>,
     handoff_output_rx: Receiver<HandoffOutput>,
     audio_rx: Receiver<RealtimeAudioFrame>,
     events_tx: Sender<RealtimeEvent>,
@@ -223,7 +229,7 @@ struct RealtimeInputTask {
 }
 
 struct RealtimeInputChannels {
-    text_rx: Receiver<ConversationTextParams>,
+    client_input_rx: Receiver<RealtimeClientInput>,
     handoff_output_rx: Receiver<HandoffOutput>,
     audio_rx: Receiver<RealtimeAudioFrame>,
 }
@@ -247,7 +253,7 @@ impl RealtimeHandoffState {
 #[allow(dead_code)]
 struct ConversationState {
     audio_tx: Sender<RealtimeAudioFrame>,
-    text_tx: Sender<ConversationTextParams>,
+    client_input_tx: Sender<RealtimeClientInput>,
     session_kind: RealtimeSessionKind,
     handoff: RealtimeHandoffState,
     input_task: JoinHandle<()>,
@@ -328,8 +334,8 @@ impl RealtimeConversationManager {
 
         let (audio_tx, audio_rx) =
             async_channel::bounded::<RealtimeAudioFrame>(AUDIO_IN_QUEUE_CAPACITY);
-        let (text_tx, text_rx) =
-            async_channel::bounded::<ConversationTextParams>(TEXT_IN_QUEUE_CAPACITY);
+        let (client_input_tx, client_input_rx) =
+            async_channel::bounded::<RealtimeClientInput>(CLIENT_INPUT_QUEUE_CAPACITY);
         let (handoff_output_tx, handoff_output_rx) =
             async_channel::bounded::<HandoffOutput>(HANDOFF_OUT_QUEUE_CAPACITY);
         let (events_tx, events_rx) =
@@ -342,7 +348,7 @@ impl RealtimeConversationManager {
             session_kind,
         );
         let input_channels = RealtimeInputChannels {
-            text_rx,
+            client_input_rx,
             handoff_output_rx,
             audio_rx,
         };
@@ -383,7 +389,7 @@ impl RealtimeConversationManager {
             let task = spawn_realtime_input_task(RealtimeInputTask {
                 writer: connection.writer(),
                 events: connection.events(),
-                text_rx: input_channels.text_rx,
+                client_input_rx: input_channels.client_input_rx,
                 handoff_output_rx: input_channels.handoff_output_rx,
                 audio_rx: input_channels.audio_rx,
                 events_tx,
@@ -397,7 +403,7 @@ impl RealtimeConversationManager {
         let mut guard = self.state.lock().await;
         *guard = Some(ConversationState {
             audio_tx,
-            text_tx,
+            client_input_tx,
             session_kind,
             handoff,
             input_task: task,
@@ -475,7 +481,7 @@ impl RealtimeConversationManager {
             let guard = self.state.lock().await;
             guard
                 .as_ref()
-                .map(|state| (state.text_tx.clone(), state.session_kind))
+                .map(|state| (state.client_input_tx.clone(), state.session_kind))
         };
 
         let Some((sender, session_kind)) = sender else {
@@ -489,7 +495,7 @@ impl RealtimeConversationManager {
                 prefix_realtime_text(params.text, REALTIME_USER_TEXT_PREFIX, session_kind);
         }
         sender
-            .send(params)
+            .send(RealtimeClientInput::Text(params))
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         Ok(())
@@ -590,6 +596,42 @@ impl RealtimeConversationManager {
             .await
             .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))?;
         Ok(())
+    }
+
+    pub(crate) async fn handoff_append(
+        &self,
+        params: ConversationHandoffAppendParams,
+    ) -> CodexResult<()> {
+        let sender = {
+            let guard = self.state.lock().await;
+            let Some(state) = guard.as_ref() else {
+                return Err(CodexErr::InvalidRequest(
+                    "conversation is not running".to_string(),
+                ));
+            };
+            if state.session_kind != RealtimeSessionKind::V1 {
+                return Err(CodexErr::InvalidRequest(
+                    "thread/realtime/appendHandoff is only supported for V1 realtime conversations"
+                        .to_string(),
+                ));
+            }
+            state.client_input_tx.clone()
+        };
+
+        if truncate_realtime_text_to_token_budget(
+            &params.output_text,
+            REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET,
+        ) != params.output_text
+        {
+            return Err(CodexErr::InvalidRequest(format!(
+                "realtime handoff output exceeds the {REALTIME_ASSISTANT_OUTPUT_TOKEN_BUDGET}-token limit"
+            )));
+        }
+
+        sender
+            .send(RealtimeClientInput::HandoffAppend(params))
+            .await
+            .map_err(|_| CodexErr::InvalidRequest("conversation is not running".to_string()))
     }
 
     pub(crate) async fn handoff_complete(&self) -> CodexResult<()> {
@@ -1221,6 +1263,18 @@ pub(crate) async fn handle_speech(
     }
 }
 
+pub(crate) async fn handle_handoff_append(
+    sess: &Arc<Session>,
+    sub_id: String,
+    params: ConversationHandoffAppendParams,
+) {
+    debug!(text = %params.output_text, "[realtime-text] appending raw realtime handoff output");
+    if let Err(err) = sess.conversation.handoff_append(params).await {
+        error!("failed to append raw realtime handoff output: {err}");
+        send_conversation_error(sess, sub_id, err.to_string(), CodexErrorInfo::BadRequest).await;
+    }
+}
+
 pub(crate) async fn handle_close(sess: &Arc<Session>, sub_id: String) {
     end_realtime_conversation(sess, sub_id, RealtimeConversationEnd::Requested).await;
 }
@@ -1290,7 +1344,7 @@ fn spawn_webrtc_sideband_input_task(input: RealtimeWebrtcSidebandInputTask) -> J
         run_realtime_input_task(RealtimeInputTask {
             writer: connection.writer(),
             events: connection.events(),
-            text_rx: input_channels.text_rx,
+            client_input_rx: input_channels.client_input_rx,
             handoff_output_rx: input_channels.handoff_output_rx,
             audio_rx: input_channels.audio_rx,
             events_tx,
@@ -1306,7 +1360,7 @@ async fn run_realtime_input_task(input: RealtimeInputTask) {
     let RealtimeInputTask {
         writer,
         events,
-        text_rx,
+        client_input_rx,
         handoff_output_rx,
         audio_rx,
         events_tx,
@@ -1320,10 +1374,10 @@ async fn run_realtime_input_task(input: RealtimeInputTask) {
 
     loop {
         let result = tokio::select! {
-            // Text input that should be sent into realtime.
-            text = text_rx.recv() => {
-                handle_text_input(
-                    text,
+            // Client-controlled input is sent in request order.
+            client_input = client_input_rx.recv() => {
+                handle_client_input(
+                    client_input,
                     &writer,
                     &events_tx,
                 )
@@ -1366,19 +1420,28 @@ async fn run_realtime_input_task(input: RealtimeInputTask) {
     }
 }
 
-async fn handle_text_input(
-    params: Result<ConversationTextParams, RecvError>,
+async fn handle_client_input(
+    input: Result<RealtimeClientInput, RecvError>,
     writer: &RealtimeWebsocketWriter,
     events_tx: &Sender<RealtimeEvent>,
 ) -> anyhow::Result<()> {
-    let params = params.context("text input channel closed")?;
+    let input = input.context("client input channel closed")?;
 
-    if let Err(err) = writer
-        .send_conversation_item_create(params.text, params.role)
-        .await
-    {
+    let result = match input {
+        RealtimeClientInput::Text(params) => {
+            writer
+                .send_conversation_item_create(params.text, params.role)
+                .await
+        }
+        RealtimeClientInput::HandoffAppend(params) => {
+            writer
+                .send_conversation_handoff_append(params.handoff_id, params.output_text)
+                .await
+        }
+    };
+    if let Err(err) = result {
         let mapped_error = map_api_error(err);
-        warn!("failed to send input text: {mapped_error}");
+        warn!("failed to send client input: {mapped_error}");
         let _ = events_tx
             .send(RealtimeEvent::Error(mapped_error.to_string()))
             .await;
