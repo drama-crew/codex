@@ -11,6 +11,14 @@ pub use runtime::McpRuntimeContext;
 pub use runtime::SandboxState;
 pub use tools::ToolInfo;
 
+pub use catalog::McpCatalogBuilder;
+pub use catalog::McpServerConflict;
+pub use catalog::McpServerConflictAction;
+pub use catalog::McpServerRegistration;
+pub use catalog::McpServerSource;
+pub use catalog::ResolvedMcpCatalog;
+pub use catalog::ResolvedMcpServer;
+
 pub use mcp::CODEX_APPS_MCP_SERVER_NAME;
 pub use mcp::McpConfig;
 pub use mcp::ToolPluginProvenance;
@@ -34,6 +42,10 @@ pub use mcp::effective_mcp_servers_from_configured;
 pub use mcp::host_owned_codex_apps_enabled;
 pub use mcp::hosted_plugin_runtime_mcp_server_config;
 pub use mcp::tool_plugin_provenance;
+pub use plugin_config::PluginMcpConfigParseOutcome;
+pub use plugin_config::PluginMcpServerParseError;
+pub use plugin_config::PluginMcpServerPlacement;
+pub use plugin_config::parse_plugin_mcp_config;
 
 pub use mcp::McpServerStatusSnapshot;
 pub use mcp::McpSnapshotDetail;
@@ -57,10 +69,12 @@ pub use mcp::qualified_mcp_tool_name_prefix;
 pub use tools::declared_openai_file_input_param_names;
 
 pub(crate) mod auth_elicitation;
+mod catalog;
 pub(crate) mod codex_apps;
 pub(crate) mod connection_manager;
 pub(crate) mod elicitation;
 pub(crate) mod mcp;
+mod plugin_config;
 mod resource_client;
 pub(crate) mod rmcp_client;
 pub(crate) mod runtime;

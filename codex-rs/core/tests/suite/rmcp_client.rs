@@ -4,7 +4,6 @@ use anyhow::Context as _;
 use anyhow::ensure;
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
-use core_test_support::test_codex::local_selections;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::ffi::OsString;
@@ -48,6 +47,7 @@ use codex_protocol::protocol::McpToolCallBeginEvent;
 use codex_protocol::protocol::Op;
 use codex_protocol::user_input::UserInput;
 use codex_utils_cargo_bin::cargo_bin;
+use codex_utils_path_uri::PathUri;
 use core_test_support::assert_regex_match;
 use core_test_support::remote_env_env_var;
 use core_test_support::responses;
@@ -141,7 +141,6 @@ fn user_turn_with_permission_profile(
         responsesapi_client_metadata: None,
         additional_context: Default::default(),
         thread_settings: codex_protocol::protocol::ThreadSettingsOverrides {
-            environments: Some(local_selections(cwd)),
             approval_policy: Some(AskForApproval::Never),
             sandbox_policy: Some(sandbox_policy),
             permission_profile,
@@ -625,8 +624,10 @@ async fn stdio_server_uses_configured_cwd_before_runtime_fallback() -> anyhow::R
 
     let fixture = test_codex()
         .with_workspace_setup(|cwd, fs| async move {
+            let configured_cwd = cwd.join("mcp-configured-cwd");
+            let configured_cwd_uri = PathUri::from_path(&configured_cwd)?;
             fs.create_directory(
-                &cwd.join("mcp-configured-cwd"),
+                &configured_cwd_uri,
                 CreateDirectoryOptions { recursive: true },
                 /*sandbox*/ None,
             )

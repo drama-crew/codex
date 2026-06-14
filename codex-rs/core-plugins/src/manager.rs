@@ -63,6 +63,7 @@ use codex_plugin::AppConnectorId;
 use codex_plugin::PluginCapabilitySummary;
 use codex_plugin::PluginId;
 use codex_plugin::PluginIdError;
+use codex_plugin::app_connector_ids_from_declarations;
 use codex_plugin::prompt_safe_plugin_description;
 use codex_protocol::protocol::HookEventName;
 use codex_protocol::protocol::Product;
@@ -77,6 +78,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::sync::Semaphore;
+use tracing::instrument;
 use tracing::warn;
 
 static CURATED_REPO_SYNC_STARTED: AtomicBool = AtomicBool::new(false);
@@ -206,9 +208,27 @@ fn featured_plugin_ids_cache_key(
 
 fn project_plugin_load_outcome_for_auth(
     outcome: PluginLoadOutcome,
-    _auth_mode: Option<AuthMode>,
+    auth_mode: Option<AuthMode>,
 ) -> PluginLoadOutcome {
-    outcome
+    let apps_route_available = auth_mode.is_some_and(AuthMode::uses_codex_backend);
+    let mut plugins = outcome.plugins().to_vec();
+    for plugin in &mut plugins {
+        if apps_route_available {
+            if plugin.is_active() && !plugin.apps.is_empty() {
+                let app_declaration_names = plugin
+                    .apps
+                    .iter()
+                    .map(|app| app.name.as_str())
+                    .collect::<HashSet<_>>();
+                plugin
+                    .mcp_servers
+                    .retain(|name, _| !app_declaration_names.contains(name.as_str()));
+            }
+        } else {
+            plugin.apps.clear();
+        }
+    }
+    PluginLoadOutcome::from_plugins(plugins)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,6 +274,7 @@ pub struct PluginDetail {
     pub disabled_skill_paths: HashSet<AbsolutePathBuf>,
     pub hooks: Vec<PluginHookSummary>,
     pub apps: Vec<AppConnectorId>,
+    pub app_category_by_id: HashMap<String, String>,
     pub mcp_server_names: Vec<String>,
     pub details_unavailable_reason: Option<PluginDetailsUnavailableReason>,
 }
@@ -352,12 +373,13 @@ struct PluginLoadCacheKey {
 
 impl PluginsManager {
     pub fn new(codex_home: PathBuf) -> Self {
-        Self::new_with_restriction_product(codex_home, Some(Product::Codex))
+        Self::new_with_options(codex_home, Some(Product::Codex), /*auth_mode*/ None)
     }
 
-    pub fn new_with_restriction_product(
+    pub fn new_with_options(
         codex_home: PathBuf,
         restriction_product: Option<Product>,
+        auth_mode: Option<AuthMode>,
     ) -> Self {
         // Product restrictions are enforced at marketplace admission time for a given CODEX_HOME:
         // listing, install, and curated refresh all consult this restriction context before new
@@ -384,7 +406,7 @@ impl PluginsManager {
                 GlobalRemoteCatalogCacheRefreshState::default(),
             ),
             restriction_product,
-            auth_mode: RwLock::new(None),
+            auth_mode: RwLock::new(auth_mode),
             analytics_events_client: RwLock::new(None),
         }
     }
@@ -431,6 +453,11 @@ impl PluginsManager {
             .await
     }
 
+    #[instrument(
+        level = "trace",
+        skip_all,
+        fields(force_reload, plugins_enabled = config.plugins_enabled)
+    )]
     pub(crate) async fn plugins_for_config_with_force_reload(
         &self,
         config: &PluginsConfigInput,
@@ -1187,6 +1214,7 @@ impl PluginsManager {
         })
     }
 
+    #[instrument(level = "trace", skip_all)]
     pub async fn read_plugin_detail_for_marketplace_plugin(
         &self,
         config: &PluginsConfigInput,
@@ -1224,6 +1252,7 @@ impl PluginsManager {
                 disabled_skill_paths: HashSet::new(),
                 hooks: Vec::new(),
                 apps: Vec::new(),
+                app_category_by_id: HashMap::new(),
                 mcp_server_names: Vec::new(),
                 details_unavailable_reason: Some(
                     PluginDetailsUnavailableReason::InstallRequiredForRemoteSource,
@@ -1290,7 +1319,17 @@ impl PluginsManager {
                 event_name: hook.event_name,
             })
             .collect();
-        let apps = load_plugin_apps(source_path.as_path()).await;
+        let app_declarations = load_plugin_apps(source_path.as_path()).await;
+        let apps = app_connector_ids_from_declarations(&app_declarations);
+        let mut seen_app_connector_ids = HashSet::new();
+        let mut app_category_by_id = HashMap::new();
+        for app in &app_declarations {
+            if seen_app_connector_ids.insert(app.connector_id.0.as_str())
+                && let Some(category) = &app.category
+            {
+                app_category_by_id.insert(app.connector_id.0.clone(), category.clone());
+            }
+        }
         let mut mcp_server_names = load_plugin_mcp_servers(source_path.as_path())
             .await
             .into_keys()
@@ -1313,6 +1352,7 @@ impl PluginsManager {
             disabled_skill_paths: resolved_skills.disabled_skill_paths,
             hooks,
             apps,
+            app_category_by_id,
             mcp_server_names,
             details_unavailable_reason: None,
         })
