@@ -230,7 +230,6 @@ impl From<&ResponsesApiRequest> for ResponseCreateWsRequest {
 #[derive(Debug, Serialize)]
 pub struct ResponseCreateWsRequest {
     pub model: String,
-    #[serde(skip_serializing_if = "String::is_empty")]
     pub instructions: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_response_id: Option<String>,

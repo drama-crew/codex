@@ -660,6 +660,8 @@ async fn responses_websocket_sends_responses_lite_metadata_per_request() {
     .await;
 
     let connection = server.single_connection();
+    let lite_request = connection.get(1).expect("missing Responses Lite request");
+    assert_eq!(lite_request.body_json()["instructions"].as_str(), Some(""));
     assert_eq!(
         connection
             .iter()
