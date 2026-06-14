@@ -36,11 +36,12 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
         return None;
     };
 
-    match (
-        invocation.tool_name.namespace.as_deref(),
-        invocation.tool_name.name.as_str(),
-    ) {
-        (None, "shell_command") => serde_json::from_str::<ShellCommandToolCallParams>(arguments)
+    if !invocation.tool_name.is_default_namespace() {
+        return None;
+    }
+
+    match invocation.tool_name.name.as_str() {
+        "shell_command" => serde_json::from_str::<ShellCommandToolCallParams>(arguments)
             .ok()
             .map(|params| {
                 if !invocation.turn.config.permissions.allow_login_shell
@@ -61,7 +62,7 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                 let cwd = invocation.turn.resolve_path(params.workdir).to_path_buf();
                 (command, cwd)
             }),
-        (None, "exec_command") => serde_json::from_str::<ExecCommandArgs>(arguments)
+        "exec_command" => serde_json::from_str::<ExecCommandArgs>(arguments)
             .ok()
             .and_then(|params| {
                 let command = crate::tools::handlers::unified_exec::get_command(
@@ -75,6 +76,6 @@ fn shell_command_for_invocation(invocation: &ToolInvocation) -> Option<(Vec<Stri
                 let cwd = invocation.turn.resolve_path(params.workdir).to_path_buf();
                 Some((command.command, cwd))
             }),
-        (Some(_), _) | (None, _) => None,
+        _ => None,
     }
 }

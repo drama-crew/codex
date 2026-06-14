@@ -69,9 +69,7 @@ impl ToolPlanProbe {
                     namespace
                         .tools
                         .iter()
-                        .map(|tool| match tool {
-                            ResponsesApiNamespaceTool::Function(tool) => tool.name.clone(),
-                        })
+                        .map(|tool| tool.name().to_string())
                         .collect::<Vec<_>>(),
                 )),
                 ToolSpec::Function(_)
