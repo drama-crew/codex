@@ -19,6 +19,7 @@ use codex_tools::ToolSearchInfo;
 use codex_tools::ToolSearchSourceInfo;
 use codex_tools::ToolSpec;
 use codex_tools::coalesce_loadable_tool_specs;
+use codex_tools::tool_search_tool_name;
 
 pub struct ToolSearchHandler {
     entries: Vec<ToolSearchEntry>,
@@ -55,7 +56,7 @@ impl ToolSearchHandler {
 
 impl ToolExecutor<ToolInvocation> for ToolSearchHandler {
     fn tool_name(&self) -> ToolName {
-        ToolName::plain(TOOL_SEARCH_TOOL_NAME)
+        tool_search_tool_name()
     }
 
     fn spec(&self) -> ToolSpec {
