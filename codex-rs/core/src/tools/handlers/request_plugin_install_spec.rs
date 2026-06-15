@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 
 pub(crate) fn create_request_plugin_install_tool() -> ToolSpec {
     let description = format!(
-        "# Request plugin/connector install\n\nUse this tool only after `{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}` returns one or more plugins or connectors that exactly match the user's explicit request.\n\nDo not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. Make one call with `entries` for a flat list or `categories` when alternatives are organized by category; use one flat `entries` item for a single target. Pass only exact `tool_type` and `tool_id` values returned by `{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}`; Codex resolves picker labels and metadata from that known tool list.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools."
+        "# Request plugin/connector install\n\nUse this tool only after `{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}` returns one or more plugins or connectors that exactly match the user's explicit request.\n\nDo not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. Make one call with `entries` for a flat list or `categories` when alternatives are organized by category; use one flat `entries` item for a single target. Pass only exact `tool_type` and `tool_id` values returned by `{LIST_AVAILABLE_PLUGINS_TO_INSTALL_TOOL_NAME}`; Codex resolves picker labels and metadata from that known tool list.\n\nWhen this tool returns, the user-visible install picker has resolved and is no longer visible.\n\nIMPORTANT: DO NOT call this tool in parallel with other tools."
     );
 
     ToolSpec::Function(ResponsesApiTool {
@@ -124,6 +124,7 @@ mod tests {
             "# Request plugin/connector install\n\n",
             "Use this tool only after `list_available_plugins_to_install` returns one or more plugins or connectors that exactly match the user's explicit request.\n\n",
             "Do not use it for adjacent capabilities, broad recommendations, or tools that merely seem useful. Make one call with `entries` for a flat list or `categories` when alternatives are organized by category; use one flat `entries` item for a single target. Pass only exact `tool_type` and `tool_id` values returned by `list_available_plugins_to_install`; Codex resolves picker labels and metadata from that known tool list.\n\n",
+            "When this tool returns, the user-visible install picker has resolved and is no longer visible.\n\n",
             "IMPORTANT: DO NOT call this tool in parallel with other tools.",
         );
 
