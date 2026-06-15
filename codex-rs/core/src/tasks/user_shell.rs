@@ -159,6 +159,7 @@ pub(crate) async fn execute_user_shell_command(
                 parsed_cmd: parsed_cmd.clone(),
                 source: ExecCommandSource::UserShell,
                 interaction_input: None,
+                summary: None,
             }),
         )
         .await;

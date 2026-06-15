@@ -91,6 +91,7 @@ pub(crate) async fn emit_exec_command_begin(
     source: ExecCommandSource,
     interaction_input: Option<String>,
     process_id: Option<&str>,
+    summary: Option<String>,
 ) {
     ctx.session
         .send_event(
@@ -105,6 +106,7 @@ pub(crate) async fn emit_exec_command_begin(
                 parsed_cmd: parsed_cmd.to_vec(),
                 source,
                 interaction_input,
+                summary,
             }),
         )
         .await;
@@ -127,6 +129,7 @@ pub(crate) enum ToolEmitter {
         source: ExecCommandSource,
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
+        summary: Option<String>,
     },
 }
 
@@ -153,6 +156,7 @@ impl ToolEmitter {
         cwd: AbsolutePathBuf,
         source: ExecCommandSource,
         process_id: Option<String>,
+        summary: Option<String>,
     ) -> Self {
         let parsed_cmd = parse_command(command);
         Self::UnifiedExec {
@@ -161,6 +165,7 @@ impl ToolEmitter {
             source,
             parsed_cmd,
             process_id,
+            summary,
         }
     }
 
@@ -180,7 +185,7 @@ impl ToolEmitter {
                     ctx,
                     ExecCommandInput::new(
                         command, cwd, parsed_cmd, *source, /*interaction_input*/ None,
-                        /*process_id*/ None,
+                        /*process_id*/ None, /*summary*/ None,
                     ),
                     stage,
                 )
@@ -292,6 +297,7 @@ impl ToolEmitter {
                     source,
                     parsed_cmd,
                     process_id,
+                    summary,
                 },
                 stage,
             ) => {
@@ -304,6 +310,7 @@ impl ToolEmitter {
                         *source,
                         /*interaction_input*/ None,
                         process_id.as_deref(),
+                        summary.as_deref(),
                     ),
                     stage,
                 )
@@ -412,6 +419,7 @@ struct ExecCommandInput<'a> {
     source: ExecCommandSource,
     interaction_input: Option<&'a str>,
     process_id: Option<&'a str>,
+    summary: Option<&'a str>,
 }
 
 impl<'a> ExecCommandInput<'a> {
@@ -422,6 +430,7 @@ impl<'a> ExecCommandInput<'a> {
         source: ExecCommandSource,
         interaction_input: Option<&'a str>,
         process_id: Option<&'a str>,
+        summary: Option<&'a str>,
     ) -> Self {
         Self {
             command,
@@ -430,6 +439,7 @@ impl<'a> ExecCommandInput<'a> {
             source,
             interaction_input,
             process_id,
+            summary,
         }
     }
 }
@@ -459,6 +469,7 @@ async fn emit_exec_stage(
                 exec_input.source,
                 exec_input.interaction_input.map(str::to_owned),
                 exec_input.process_id,
+                exec_input.summary.map(str::to_owned),
             )
             .await;
         }

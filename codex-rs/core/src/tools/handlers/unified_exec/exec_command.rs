@@ -165,6 +165,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
             additional_permissions,
             justification,
             prefix_rule,
+            summary,
             ..
         } = args;
 
@@ -276,6 +277,7 @@ impl ToolExecutor<ToolInvocation> for ExecCommandHandler {
                         .permissions_preapproved,
                     justification,
                     prefix_rule,
+                    summary,
                 },
                 &context,
             )

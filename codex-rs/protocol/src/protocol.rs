@@ -3141,6 +3141,10 @@ pub struct ExecCommandBeginEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub interaction_input: Option<String>,
+    /// Optional model-authored one-line summary of the command, for display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]

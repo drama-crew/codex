@@ -28,6 +28,8 @@ pub use write_stdin::WriteStdinHandler;
 pub(crate) struct ExecCommandArgs {
     cmd: String,
     #[serde(default)]
+    pub(crate) summary: Option<String>,
+    #[serde(default)]
     pub(crate) workdir: Option<String>,
     #[serde(default)]
     shell: Option<String>,
