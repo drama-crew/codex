@@ -248,6 +248,7 @@ impl ExecCommandHandler {
             additional_permissions,
             justification,
             prefix_rule,
+            summary,
             ..
         } = args;
 
@@ -361,6 +362,7 @@ impl ExecCommandHandler {
                         .permissions_preapproved,
                     justification,
                     prefix_rule,
+                    summary,
                 },
                 &context,
             )

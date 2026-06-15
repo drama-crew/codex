@@ -2659,6 +2659,7 @@ fn core_turn_item_into_thread_item_converts_supported_variants() {
         exit_code: Some(0),
         duration: Some(Duration::from_millis(5)),
         formatted_output: Some("done\n".to_string()),
+        summary: None,
     });
 
     assert_eq!(

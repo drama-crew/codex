@@ -3473,6 +3473,10 @@ pub struct ExecCommandBeginEvent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub interaction_input: Option<String>,
+    /// Optional model-authored one-line summary of the command, for display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub summary: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, JsonSchema, TS)]
@@ -5367,6 +5371,7 @@ mod tests {
                 exit_code: None,
                 duration: None,
                 formatted_output: None,
+                summary: None,
             }),
         };
         let completed = ItemCompletedEvent {
@@ -5390,6 +5395,7 @@ mod tests {
                 exit_code: Some(0),
                 duration: Some(Duration::from_millis(5)),
                 formatted_output: Some("done\n".into()),
+                summary: None,
             }),
         };
 

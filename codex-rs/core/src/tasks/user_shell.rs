@@ -197,6 +197,7 @@ pub(crate) async fn execute_user_shell_command(
                 exit_code: None,
                 duration: None,
                 formatted_output: None,
+                summary: None,
             }),
         )
         .await;
@@ -280,6 +281,7 @@ pub(crate) async fn execute_user_shell_command(
                         exit_code: Some(-1),
                         duration: Some(Duration::ZERO),
                         formatted_output: Some(aborted_message),
+                        summary: None,
                     }),
                 )
                 .await;
@@ -310,6 +312,7 @@ pub(crate) async fn execute_user_shell_command(
                             &output,
                             turn_context.model_info.truncation_policy.into(),
                         )),
+                        summary: None,
                     }),
                 )
                 .await;
@@ -349,6 +352,7 @@ pub(crate) async fn execute_user_shell_command(
                             &exec_output,
                             turn_context.model_info.truncation_policy.into(),
                         )),
+                        summary: None,
                     }),
                 )
                 .await;

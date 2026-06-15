@@ -161,6 +161,8 @@ struct ExecCommandBeginTracePayload<'a> {
     source: ExecCommandSource,
     #[serde(skip_serializing_if = "Option::is_none")]
     interaction_input: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    summary: Option<&'a str>,
 }
 
 impl<'a> From<&'a ExecCommandBeginEvent> for ExecCommandBeginTracePayload<'a> {
@@ -175,6 +177,7 @@ impl<'a> From<&'a ExecCommandBeginEvent> for ExecCommandBeginTracePayload<'a> {
             parsed_cmd,
             source,
             interaction_input,
+            summary,
         } = event;
         Self {
             call_id,
@@ -186,6 +189,7 @@ impl<'a> From<&'a ExecCommandBeginEvent> for ExecCommandBeginTracePayload<'a> {
             parsed_cmd,
             source: *source,
             interaction_input: interaction_input.as_deref(),
+            summary: summary.as_deref(),
         }
     }
 }
