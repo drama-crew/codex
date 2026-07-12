@@ -217,6 +217,10 @@ fn load_for_prompt_bytes_uncached(
 
         // Drama recode branch: only when mode==ResizeToFit, cfg present, and NOT a GIF.
         // Returns early, bypassing the upstream target-dimensions/encode path below.
+        // Known limitation (accepted): re-encoding strips EXIF, so JPEGs that rely on
+        // the EXIF Orientation tag lose their rotation hint. The upstream >MAX_DIMENSION
+        // resize path already behaves this way; the passthrough_bytes threshold merely
+        // widens the affected set.
         if mode == PromptImageMode::ResizeToFit
             && cfg.is_some()
             && format != Some(ImageFormat::Gif)
