@@ -148,6 +148,10 @@ pub fn load_for_prompt_bytes_with(
         let (width, height) = dynamic.dimensions();
 
         // New recode branch: only when mode==ResizeToFit, cfg present, and NOT a GIF.
+        // Known limitation (accepted): re-encoding strips EXIF, so JPEGs that rely on
+        // the EXIF Orientation tag lose their rotation hint. The upstream >MAX_DIMENSION
+        // resize path already behaves this way; the passthrough_bytes threshold merely
+        // widens the affected set.
         if mode == PromptImageMode::ResizeToFit
             && cfg.is_some()
             && format != Some(ImageFormat::Gif)
@@ -505,6 +509,40 @@ mod tests {
         let decoded = image::load_from_memory(&out.bytes).unwrap().to_rgb8();
         let p = decoded.get_pixel(450, 450);
         assert!(p.0[0] > 245 && p.0[1] > 245 && p.0[2] > 245, "expected white, got {:?}", p);
+    }
+
+    #[test]
+    fn gif_bypasses_recode_even_with_config() {
+        // GIF is excluded from the recode branch: with cfg=Some the output must be
+        // byte-identical to the upstream (cfg=None) path, never JPEG.
+        let img = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(300, 200, |x, y| {
+            image::Rgba([(x % 251) as u8, (y % 199) as u8, 33, 255])
+        }));
+        let mut gif = Vec::new();
+        img.write_to(&mut Cursor::new(&mut gif), ImageFormat::Gif)
+            .unwrap();
+        let cfg = PromptImageRecodeConfig {
+            jpeg_quality: 90,
+            max_dim: 2048,
+            passthrough_bytes: 1, // would force recode for non-GIF inputs
+        };
+        let with_cfg = load_for_prompt_bytes_with(
+            Path::new("t.gif"),
+            gif.clone(),
+            PromptImageMode::ResizeToFit,
+            Some(&cfg),
+        )
+        .unwrap();
+        let upstream = load_for_prompt_bytes_with(
+            Path::new("t2.gif"),
+            gif,
+            PromptImageMode::ResizeToFit,
+            None,
+        )
+        .unwrap();
+        assert_ne!(with_cfg.mime, "image/jpeg");
+        assert_eq!(with_cfg.mime, upstream.mime);
+        assert_eq!(with_cfg.bytes, upstream.bytes);
     }
 
     // ---- from_env test (serialize env access with a global mutex) ----
