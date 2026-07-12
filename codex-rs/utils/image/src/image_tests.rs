@@ -1,4 +1,5 @@
 use std::io::Cursor;
+use std::sync::Mutex;
 
 use super::*;
 use image::GenericImageView;
@@ -346,6 +347,7 @@ async fn bounds_cache_by_encoded_byte_size() {
     let key = |digest_byte| ImageCacheKey {
         digest: [digest_byte; 20],
         mode: PromptImageMode::Original,
+        recode: None,
     };
     let image = |size| EncodedImage {
         bytes: vec![0; size].into(),
@@ -362,3 +364,118 @@ async fn bounds_cache_by_encoded_byte_size() {
     assert!(cache.get(&key(2)).is_some());
     assert!(cache.get(&key(3)).is_none());
 }
+
+// ---- drama: DRAMA_PROMPT_IMAGE_* recode knobs (test _with variant to avoid env global races) ----
+
+#[test]
+fn recode_large_png_to_jpeg_within_max_dim() {
+    // 1200x900 不可直通（bytes > passthrough 阈值），期望输出 JPEG 且尺寸不变（≤max_dim）
+    let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(1200, 900, |x, y| {
+        image::Rgba([(x % 251) as u8, (y % 241) as u8, ((x + y) % 253) as u8, 255])
+    }));
+    let mut png = Vec::new();
+    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
+    let cfg = PromptImageRecodeConfig { jpeg_quality: 90, max_dim: 2048, passthrough_bytes: 1024 };
+    let out = load_for_prompt_bytes_with(Path::new("t.png"), png.clone(), PromptImageMode::ResizeToFit, Some(&cfg)).unwrap();
+    assert_eq!(out.mime, "image/jpeg");
+    assert!(out.bytes.len() < png.len());
+    assert_eq!((out.width, out.height), (1200, 900));
+}
+
+#[test]
+fn passthrough_small_image_untouched() {
+    let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(64, 64, image::Rgba([1, 2, 3, 255])));
+    let mut png = Vec::new();
+    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
+    let cfg = PromptImageRecodeConfig { jpeg_quality: 90, max_dim: 2048, passthrough_bytes: 512 * 1024 };
+    let out = load_for_prompt_bytes_with(Path::new("t.png"), png.clone(), PromptImageMode::ResizeToFit, Some(&cfg)).unwrap();
+    assert_eq!(out.mime, "image/png");
+    assert_eq!(out.bytes.as_ref(), png.as_slice()); // 原字节直通
+}
+
+#[test]
+fn recode_resizes_above_max_dim() {
+    let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(3000, 1500, |x, _| {
+        image::Rgba([(x % 255) as u8, 0, 0, 255])
+    }));
+    let mut png = Vec::new();
+    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
+    let cfg = PromptImageRecodeConfig { jpeg_quality: 90, max_dim: 1536, passthrough_bytes: 1024 };
+    let out = load_for_prompt_bytes_with(Path::new("t.png"), png, PromptImageMode::ResizeToFit, Some(&cfg)).unwrap();
+    assert_eq!(out.mime, "image/jpeg");
+    assert!(out.width <= 1536 && out.height <= 1536);
+}
+
+#[test]
+fn original_mode_ignores_recode_config() {
+    let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(1200, 900, |x, y| {
+        image::Rgba([(x % 251) as u8, (y % 241) as u8, 7, 255])
+    }));
+    let mut png = Vec::new();
+    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
+    let cfg = PromptImageRecodeConfig { jpeg_quality: 90, max_dim: 512, passthrough_bytes: 1 };
+    let out = load_for_prompt_bytes_with(Path::new("t.png"), png.clone(), PromptImageMode::Original, Some(&cfg)).unwrap();
+    assert_eq!(out.mime, "image/png");
+    assert_eq!(out.bytes.as_ref(), png.as_slice());
+}
+
+#[test]
+fn no_config_matches_upstream_behavior() {
+    // cfg=None 时 2048 内 PNG 原样直通（上游行为）
+    let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_fn(1200, 900, |x, y| {
+        image::Rgba([(x % 251) as u8, (y % 241) as u8, 9, 255])
+    }));
+    let mut png = Vec::new();
+    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
+    let out = load_for_prompt_bytes_with(Path::new("t.png"), png.clone(), PromptImageMode::ResizeToFit, None).unwrap();
+    assert_eq!(out.bytes.as_ref(), png.as_slice());
+}
+
+#[test]
+fn alpha_flattened_onto_white() {
+    // 全透明像素 → 重编码后应为白色（JPEG 无 alpha）
+    let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(900, 900, image::Rgba([255, 0, 0, 0])));
+    let mut png = Vec::new();
+    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
+    let cfg = PromptImageRecodeConfig { jpeg_quality: 90, max_dim: 2048, passthrough_bytes: 1 };
+    let out = load_for_prompt_bytes_with(Path::new("t.png"), png, PromptImageMode::ResizeToFit, Some(&cfg)).unwrap();
+    let decoded = image::load_from_memory(&out.bytes).unwrap().to_rgb8();
+    let p = decoded.get_pixel(450, 450);
+    assert!(p.0[0] > 245 && p.0[1] > 245 && p.0[2] > 245, "expected white, got {:?}", p);
+}
+
+// ---- drama: from_env test (serialize env access with a global mutex) ----
+
+static ENV_MUTEX: Mutex<()> = Mutex::new(());
+
+#[test]
+fn from_env_all_absent_returns_none() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    // SAFETY: single-threaded access guaranteed by ENV_MUTEX.
+    unsafe {
+        std::env::remove_var("DRAMA_PROMPT_IMAGE_JPEG_QUALITY");
+        std::env::remove_var("DRAMA_PROMPT_IMAGE_MAX_DIM");
+        std::env::remove_var("DRAMA_PROMPT_IMAGE_PASSTHROUGH_BYTES");
+    }
+    assert!(PromptImageRecodeConfig::from_env().is_none());
+}
+
+#[test]
+fn from_env_single_var_returns_some_with_defaults() {
+    let _lock = ENV_MUTEX.lock().unwrap();
+    // SAFETY: single-threaded access guaranteed by ENV_MUTEX.
+    unsafe {
+        std::env::remove_var("DRAMA_PROMPT_IMAGE_JPEG_QUALITY");
+        std::env::remove_var("DRAMA_PROMPT_IMAGE_MAX_DIM");
+        std::env::remove_var("DRAMA_PROMPT_IMAGE_PASSTHROUGH_BYTES");
+        std::env::set_var("DRAMA_PROMPT_IMAGE_JPEG_QUALITY", "75");
+    }
+    let cfg = PromptImageRecodeConfig::from_env().expect("should be Some when any var set");
+    assert_eq!(cfg.jpeg_quality, 75);
+    assert_eq!(cfg.max_dim, 2048);          // default
+    assert_eq!(cfg.passthrough_bytes, 512 * 1024); // default
+    // SAFETY: cleanup.
+    unsafe { std::env::remove_var("DRAMA_PROMPT_IMAGE_JPEG_QUALITY"); }
+}
+
+// ---- end of drama recode tests ----
