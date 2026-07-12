@@ -494,4 +494,38 @@ fn from_env_single_var_returns_some_with_defaults() {
     unsafe { std::env::remove_var("DRAMA_PROMPT_IMAGE_JPEG_QUALITY"); }
 }
 
+#[test]
+fn gif_bypasses_recode_even_with_config() {
+    // GIF is excluded from the recode branch: with cfg=Some the output must be
+    // byte-identical to the upstream (cfg=None) path, never JPEG.
+    let img = DynamicImage::ImageRgba8(image::RgbaImage::from_fn(300, 200, |x, y| {
+        image::Rgba([(x % 251) as u8, (y % 199) as u8, 33, 255])
+    }));
+    let mut gif = Vec::new();
+    img.write_to(&mut Cursor::new(&mut gif), ImageFormat::Gif)
+        .unwrap();
+    let cfg = PromptImageRecodeConfig {
+        jpeg_quality: 90,
+        max_dim: 2048,
+        passthrough_bytes: 1, // would force recode for non-GIF inputs
+    };
+    let with_cfg = load_for_prompt_bytes_with(
+        Path::new("t.gif"),
+        gif.clone(),
+        PromptImageMode::ResizeToFit,
+        Some(&cfg),
+    )
+    .unwrap();
+    let upstream = load_for_prompt_bytes_with(
+        Path::new("t2.gif"),
+        gif,
+        PromptImageMode::ResizeToFit,
+        None,
+    )
+    .unwrap();
+    assert_ne!(with_cfg.mime, "image/jpeg");
+    assert_eq!(with_cfg.mime, upstream.mime);
+    assert_eq!(with_cfg.bytes, upstream.bytes);
+}
+
 // ---- end of drama recode tests ----
