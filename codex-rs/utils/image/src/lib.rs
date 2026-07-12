@@ -88,10 +88,65 @@ struct ImageMetadata {
     exif: Option<Vec<u8>>,
 }
 
+/// Drama deployment knobs for prompt image re-encoding.
+///
+/// Controls JPEG quality, maximum image dimension, and passthrough threshold when
+/// `mode == ResizeToFit` and a non-GIF source is detected.  When all three env vars
+/// are absent `from_env()` returns `None` and the upstream codex behaviour is
+/// preserved byte-for-byte.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PromptImageRecodeConfig {
+    /// JPEG encode quality [1, 100].  Default 90.
+    pub jpeg_quality: u8,
+    /// Maximum width/height for resize.  Default 2048.  Values <64 are treated as
+    /// invalid and replaced with the default.
+    pub max_dim: u32,
+    /// Images whose byte length is ≤ this threshold AND whose dimensions fit within
+    /// `max_dim` AND whose format is preservable are passed through unchanged.
+    /// Default 512 KiB (524288).
+    pub passthrough_bytes: usize,
+}
+
+impl PromptImageRecodeConfig {
+    /// Read configuration from environment variables.
+    ///
+    /// * `DRAMA_PROMPT_IMAGE_JPEG_QUALITY`  — integer [1, 100], clamped
+    /// * `DRAMA_PROMPT_IMAGE_MAX_DIM`       — integer ≥ 64; <64 falls back to 2048
+    /// * `DRAMA_PROMPT_IMAGE_PASSTHROUGH_BYTES` — integer ≥ 0
+    ///
+    /// Returns `None` iff **all three** vars are absent (upstream byte-for-byte
+    /// behaviour preserved).  If any one var is present the others fall back to
+    /// their defaults (90 / 2048 / 524288).
+    pub fn from_env() -> Option<Self> {
+        let q = std::env::var("DRAMA_PROMPT_IMAGE_JPEG_QUALITY").ok();
+        let d = std::env::var("DRAMA_PROMPT_IMAGE_MAX_DIM").ok();
+        let p = std::env::var("DRAMA_PROMPT_IMAGE_PASSTHROUGH_BYTES").ok();
+        if q.is_none() && d.is_none() && p.is_none() {
+            return None;
+        }
+        Some(Self {
+            jpeg_quality: q
+                .and_then(|v| v.parse::<u8>().ok())
+                .map(|v| v.clamp(1, 100))
+                .unwrap_or(90),
+            max_dim: d
+                .and_then(|v| v.parse::<u32>().ok())
+                .filter(|v| *v >= 64)
+                .unwrap_or(2048),
+            passthrough_bytes: p
+                .and_then(|v| v.parse::<usize>().ok())
+                .unwrap_or(512 * 1024),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 struct ImageCacheKey {
     digest: [u8; 20],
     mode: PromptImageMode,
+    /// Recode config is part of the cache key so that two calls with different
+    /// configs sharing the same source bytes do not collide in the LRU cache.
+    recode: Option<PromptImageRecodeConfig>,
 }
 
 type ImageCache = BlockingLruCache<ImageCacheKey, EncodedImage>;
@@ -99,16 +154,30 @@ type ImageCache = BlockingLruCache<ImageCacheKey, EncodedImage>;
 static IMAGE_CACHE: LazyLock<ImageCache> =
     LazyLock::new(|| BlockingLruCache::new(NonZeroUsize::new(32).unwrap_or(NonZeroUsize::MIN)));
 
+/// Thin public wrapper: reads recode config from env and delegates to
+/// `load_for_prompt_bytes_with`.  Public signature is unchanged from upstream.
 pub fn load_for_prompt_bytes(
     path: &Path,
     file_bytes: Vec<u8>,
     mode: PromptImageMode,
+) -> Result<EncodedImage, ImageProcessingError> {
+    let cfg = PromptImageRecodeConfig::from_env();
+    load_for_prompt_bytes_with(path, file_bytes, mode, cfg.as_ref())
+}
+
+/// Core implementation.  `cfg = None` → byte-for-byte upstream behaviour.
+pub fn load_for_prompt_bytes_with(
+    path: &Path,
+    file_bytes: Vec<u8>,
+    mode: PromptImageMode,
+    cfg: Option<&PromptImageRecodeConfig>,
 ) -> Result<EncodedImage, ImageProcessingError> {
     let path_buf = path.to_path_buf();
 
     let key = ImageCacheKey {
         digest: sha1_digest(&file_bytes),
         mode,
+        recode: cfg.copied(),
     };
 
     if let Some(image) = IMAGE_CACHE.get(&key) {
@@ -159,6 +228,53 @@ fn load_for_prompt_bytes_uncached(
 
         let (width, height) = dynamic.dimensions();
 
+        // Drama recode branch: only when mode==ResizeToFit, cfg present, and NOT a GIF.
+        // Returns early, bypassing the upstream target-dimensions/encode path below.
+        if mode == PromptImageMode::ResizeToFit
+            && cfg.is_some()
+            && format != Some(ImageFormat::Gif)
+        {
+            let cfg = cfg.unwrap();
+
+            let can_pass = file_bytes.len() <= cfg.passthrough_bytes
+                && width <= cfg.max_dim
+                && height <= cfg.max_dim
+                && format.map(can_preserve_source_bytes).unwrap_or(false);
+
+            if can_pass {
+                // Direct passthrough: original bytes unchanged.
+                let mime = format_to_mime(format.unwrap());
+                return Ok(EncodedImage {
+                    bytes: file_bytes.into(),
+                    mime,
+                    width,
+                    height,
+                });
+            } else {
+                // Resize if needed, flatten alpha, encode as JPEG.
+                let resized = if width > cfg.max_dim || height > cfg.max_dim {
+                    dynamic.resize(cfg.max_dim, cfg.max_dim, FilterType::Triangle)
+                } else {
+                    dynamic
+                };
+                let rgb = flatten_onto_white(&resized);
+                let mut buffer = Vec::new();
+                JpegEncoder::new_with_quality(&mut buffer, cfg.jpeg_quality)
+                    .encode_image(&rgb)
+                    .map_err(|source| ImageProcessingError::Encode {
+                        format: ImageFormat::Jpeg,
+                        source,
+                    })?;
+                return Ok(EncodedImage {
+                    bytes: buffer.into(),
+                    mime: "image/jpeg".to_string(),
+                    width: rgb.width(),
+                    height: rgb.height(),
+                });
+            }
+        }
+
+        // ---- upstream path (unchanged) ----
         let target_dimensions = match mode {
             PromptImageMode::ResizeToFit if width > MAX_DIMENSION || height > MAX_DIMENSION => {
                 let resized = dynamic.resize(MAX_DIMENSION, MAX_DIMENSION, FilterType::Triangle);
@@ -349,6 +465,19 @@ fn prompt_image_dimensions_fit(width: u32, height: u32, limits: PromptImageResiz
     width <= limits.max_dimension
         && height <= limits.max_dimension
         && patch_count <= limits.max_patches as u64
+}
+
+/// Composite an RGBA image onto a solid white background, producing an RGB image.
+/// JPEG has no alpha channel, so transparent pixels must be composited before encoding.
+fn flatten_onto_white(image: &DynamicImage) -> DynamicImage {
+    let rgba = image.to_rgba8();
+    let mut rgb = image::RgbImage::new(rgba.width(), rgba.height());
+    for (x, y, px) in rgba.enumerate_pixels() {
+        let a = px.0[3] as u32;
+        let blend = |c: u8| ((c as u32 * a + 255 * (255 - a)) / 255) as u8;
+        rgb.put_pixel(x, y, image::Rgb([blend(px.0[0]), blend(px.0[1]), blend(px.0[2])]));
+    }
+    DynamicImage::ImageRgb8(rgb)
 }
 
 fn can_preserve_source_bytes(format: ImageFormat) -> bool {
