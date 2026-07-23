@@ -14,6 +14,16 @@ The goal is to help future agents:
 - improve future agents' ability to solve similar tasks.
 
 ============================================================
+DRAMA 平台边界、输出语言与优先级声明（强制，优先级最高，覆盖下文任何示例）
+============================================================
+
+本记忆管线服务于一个短剧/剧本创作 SaaS 平台的桌面端 agent。整合进 `MEMORY.md`/`memory_summary.md`/`skills/` 的内容只能是**用户级偏好/习惯**（审美偏好、沟通与反馈风格、模型档位或工作流偏好），绝对不能包含任何具体创作项目的剧情、角色、世界观或单项目创作决策——这些内容属于项目规则节点，不属于个人记忆；这是防止团队项目内容经个人记忆外泄的主要防线。若 `raw_memories.md`/`rollout_summaries/*.md` 中混入了项目创作内容（不应该发生，但如实处理上游疏漏），整合时必须丢弃，不得写入 `MEMORY.md`/`memory_summary.md`。全文中如残留编程/工具类场景措辞，仅用于说明格式/写法结构，同样不代表可以把项目创作内容当作记忆内容整合。
+
+输出语言（强制）：`MEMORY.md`、`memory_summary.md`、`skills/*/SKILL.md` 的正文内容一律使用**简体中文**撰写；结构性标记（如 `# Task Group:`、`scope:`、`applies_to:`、YAML frontmatter 键名、首行 `v1`）保持原样不译。
+
+优先级声明（强制，供读路径复用）：用户记忆让位于项目设定与项目规则，仅留空时补位——绝不能覆盖或建议覆盖二者。整合 `memory_summary.md`/`MEMORY.md` 时，不得写出任何暗示用户记忆应优先于或覆盖项目设定/项目规则的表述。
+
+============================================================
 CONTEXT: MEMORY FOLDER STRUCTURE
 ============================================================
 
@@ -73,6 +83,7 @@ Non-goals:
 - Copying large raw outputs verbatim
 - Over-promoting exploratory discussion, one-off impressions, or assistant proposals into
   durable handbook memory
+- 项目内的剧情、角色、世界观或单项目创作决策（属于项目规则节点，绝不整合进 MEMORY.md/memory_summary.md——参见文首强制边界）
 
 Priority guidance:
 - Optimize for reducing future user steering and interruption, not just reducing future
@@ -85,27 +96,17 @@ Priority guidance:
   failure shield, or difficult-to-discover fact that will save substantial future time.
 
 ============================================================
-EXAMPLES: USEFUL MEMORIES BY TASK TYPE
+EXAMPLES: USEFUL MEMORIES BY TASK TYPE（drama 创作平台，仅用户级偏好）
 ============================================================
 
-Coding / debugging agents:
+短剧/剧本创作协同 agent（本平台唯一场景）：
 
-- Repo orientation: key directories, entrypoints, configs, structure, etc.
-- Fast search strategy: where to grep first, what keywords worked, what did not.
-- Common failure patterns: build/test errors and the proven fix.
-- Stop rules: quickly validate success or detect wrong direction.
-- Tool usage lessons: correct commands, flags, environment assumptions.
+- 审美与风格偏好：用户反复要求或纠正的画风、镜头语言、叙事节奏、参考素材偏好。
+- 沟通与反馈习惯：用户期望的确认方式（先出方案再执行 / 直接执行）、对返工与打回的容忍度、偏好的汇报详略程度。
+- 模型档位与工作流偏好：常用的生成档位（草稿/终稿）、常用模型或参数、习惯的审批/确认节奏。
+- 反馈习惯：用户打回或认可时的典型措辞，用于预判下一次同类请求时应主动采取的默认行为。
 
-Browsing/searching agents:
-
-- Query formulations and narrowing strategies that worked.
-- Trust signals for sources; common traps (outdated pages, irrelevant results).
-- Efficient verification steps (cross-check, sanity checks).
-
-Math/logic solving agents:
-
-- Key transforms/lemmas; “if looks like X, apply Y”.
-- Typical pitfalls; minimal-check steps for correctness.
+以上仅覆盖"用户本人"跨项目、跨会话都成立的稳定偏好。具体某个项目里的剧情走向、角色设定、世界观规则、单项目创作决策，不属于这里的范畴——即使用户在对话中反复确认，也应交给项目规则节点承载，绝不整合进 MEMORY.md/memory_summary.md。
 
 ============================================================
 PHASE 2: CONSOLIDATION — YOUR TASK

@@ -13,6 +13,19 @@ The goal is to help future agents:
 - improve future agents' ability to solve similar tasks.
 
 ============================================================
+DRAMA 平台边界与输出语言（强制，优先级最高，覆盖下文任何示例）
+============================================================
+
+本记忆管线服务于一个短剧/剧本创作 SaaS 平台的桌面端 agent；这里抽取的是**用户本人**跨项目、跨会话都成立的稳定偏好与习惯，不是某一个创作项目的内容。
+
+抽取边界（强制）：
+- 只沉淀用户级偏好/习惯：审美偏好（画风、镜头语言、叙事节奏等）、沟通与反馈风格（确认方式、返工容忍度、汇报详略）、模型档位或工作流偏好（常用生成档位、模型、审批节奏）。
+- 绝对禁止把剧情、角色设定、世界观规则、单项目创作决策/约定写入 `raw_memory` 或 `rollout_summary`——这些内容属于项目规则节点管理，不属于个人记忆。宁可漏记一条偏好信号，也不能放行任何项目创作内容；这是防止团队项目内容经个人记忆外泄的主要防线。
+- 全文中如残留编程/工具类场景措辞（例如后文格式说明中的"测试失败""grader"等示例），仅用于说明证据 -> 推论的写法结构，不代表可以把项目级或创作内容当作记忆内容抽取。
+
+输出语言（强制）：`rollout_summary` 与 `raw_memory` 两个字段的正文内容一律使用**简体中文**撰写（no-op 时的空字符串除外）。schema 里的键名、frontmatter 字段名（如 `task_outcome`、`cwd`、`keywords` 等）保持英文不变，只有其取值/正文用中文表达。
+
+============================================================
 GLOBAL SAFETY, HYGIENE, AND NO-FILLER RULES (STRICT)
 ============================================================
 
@@ -80,6 +93,7 @@ Non-goals:
   changing future agent behavior
 - Treating exploratory discussion, brainstorming, or assistant proposals as durable memory
   unless they were clearly adopted, implemented, or repeatedly reinforced
+- 项目内的剧情、角色、世界观或单项目创作决策（属于项目规则节点，绝不沉淀进用户记忆——参见文首强制边界）
 
 Priority guidance:
 
@@ -124,27 +138,17 @@ General inference rule:
   inferred or volunteered, consider whether that should become a remembered default.
 
 ============================================================
-EXAMPLES: USEFUL MEMORIES BY TASK TYPE
+EXAMPLES: USEFUL MEMORIES BY TASK TYPE（drama 创作平台，仅用户级偏好）
 ============================================================
 
-Coding / debugging agents:
+短剧/剧本创作协同 agent（本平台唯一场景）：
 
-- Repo orientation: key directories, entrypoints, configs, structure, etc.
-- Fast search strategy: where to grep first, what keywords worked, what did not.
-- Common failure patterns: build/test errors and the proven fix.
-- Stop rules: quickly validate success or detect wrong direction.
-- Tool usage lessons: correct commands, flags, environment assumptions.
+- 审美与风格偏好：用户反复要求或纠正的画风、镜头语言、叙事节奏、参考素材偏好。
+- 沟通与反馈习惯：用户期望的确认方式（先出方案再执行 / 直接执行）、对返工与打回的容忍度、偏好的汇报详略程度。
+- 模型档位与工作流偏好：常用的生成档位（草稿/终稿）、常用模型或参数、习惯的审批/确认节奏。
+- 反馈习惯：用户打回或认可时的典型措辞，用于预判下一次同类请求时应主动采取的默认行为。
 
-Browsing/searching agents:
-
-- Query formulations and narrowing strategies that worked.
-- Trust signals for sources; common traps (outdated pages, irrelevant results).
-- Efficient verification steps (cross-check, sanity checks).
-
-Math/logic solving agents:
-
-- Key transforms/lemmas; “if looks like X, apply Y”.
-- Typical pitfalls; minimal-check steps for correctness.
+以上仅覆盖"用户本人"跨项目、跨会话都成立的稳定偏好。具体某个项目里的剧情走向、角色设定、世界观规则、单项目创作决策，不属于这里的范畴——即使用户在对话中反复确认，也应交给项目规则节点承载，绝不写入 raw_memory/rollout_summary。
 
 ============================================================
 TASK OUTCOME TRIAGE
@@ -233,6 +237,7 @@ Rules:
 - Empty-field no-op must use empty strings for all three fields.
 - No additional keys.
 - No prose outside JSON.
+- `rollout_summary` 与 `raw_memory` 的正文内容使用简体中文撰写（no-op 时的空字符串除外）；`rollout_slug` 保持文件名安全格式（小写字母/数字/连字符或下划线，可用拼音或英文，不强制中文）。
 
 ============================================================
 `rollout_summary` FORMAT

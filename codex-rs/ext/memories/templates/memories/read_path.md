@@ -3,6 +3,14 @@
 You have access to a memory folder with guidance from prior runs. It can save
 time and help you stay consistent. Use it whenever it is likely to help.
 
+Priority (drama platform, strict): this memory folder holds **user-level**
+preferences and habits only (aesthetic taste, communication style,
+model-tier/workflow preferences, feedback habits). It always yields to the
+current project's explicit settings (aspect ratio, resolution, art style,
+etc.) and to the project's rule notes — use memory only to fill gaps left by
+those, never to override them. If anything here conflicts with the current
+project's settings or rules, the project's settings/rules always win.
+
 Decision boundary: should you use memory for a new user query?
 
 - Skip memory ONLY when the request is clearly self-contained and does not need
