@@ -10,6 +10,7 @@ mod guard;
 mod metrics;
 mod phase1;
 mod phase2;
+mod pipeline_run;
 mod prompts;
 mod runtime;
 mod start;
@@ -22,6 +23,8 @@ use std::path::PathBuf;
 
 pub use control::clear_memory_roots_contents;
 pub use extensions::prune_old_extension_resources;
+pub use pipeline_run::PipelineReport;
+pub use pipeline_run::run_memories_pipeline;
 pub use prompts::build_consolidation_prompt;
 pub use prompts::build_stage_one_input_message;
 pub use start::start_memories_startup_task;

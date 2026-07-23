@@ -41,14 +41,60 @@ struct Counters {
     input: i64,
 }
 
+/// Outcome of one run of [`run`].
+///
+/// Unlike Phase 1 (a batch of independently-claimed rollout jobs, reported as counts), Phase 2 is
+/// gated by a single global lock, so its outcome is naturally a pair of booleans: whether this
+/// invocation held the lock and attempted a consolidation pass (`ran`), and whether that pass
+/// actually changed the committed memory content (`changed`).
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Phase2Report {
+    pub(crate) ran: bool,
+    pub(crate) changed: bool,
+}
+
+/// Snapshot of the consolidation agent's documented output artifacts (see
+/// `templates/memories/consolidation.md`), used to detect whether a consolidation run actually
+/// changed committed memory content -- as opposed to `workspace_diff.has_changes()` above, which
+/// only tells us whether the consolidation *inputs* changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ConsolidationOutputSnapshot {
+    memory_md: Option<String>,
+    memory_summary_md: Option<String>,
+}
+
+async fn consolidation_output_snapshot(root: &Path) -> ConsolidationOutputSnapshot {
+    ConsolidationOutputSnapshot {
+        memory_md: read_optional_file_string(&root.join("MEMORY.md")).await,
+        memory_summary_md: read_optional_file_string(&root.join("memory_summary.md")).await,
+    }
+}
+
+async fn read_optional_file_string(path: &Path) -> Option<String> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(contents) => Some(contents),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            tracing::warn!(
+                "failed reading {} for consolidation output snapshot: {err}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
 /// Runs memory phase 2 (aka consolidation) in strict order. The method represents the linear
 /// flow of the consolidation phase.
-pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
+///
+/// This awaits consolidation all the way through agent completion, workspace baseline reset, and
+/// DB persistence before returning -- see [`agent::run_to_completion`].
+pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) -> Phase2Report {
     let phase_two_e2e_timer = context.start_timer(MEMORY_PHASE_TWO_E2E_MS);
 
     let Some(db) = context.state_db() else {
         // This should not happen.
-        return;
+        return Phase2Report::default();
     };
     let root = memory_root(&config.codex_home);
     let max_raw_memories = config.memories.max_raw_memories_for_consolidation;
@@ -59,9 +105,12 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
         Ok(claim) => claim,
         Err(e) => {
             context.counter(MEMORY_PHASE_TWO_JOBS, /*inc*/ 1, &[("status", e)]);
-            return;
+            return Phase2Report::default();
         }
     };
+    // From here on we hold the global Phase 2 job lock, so this invocation "ran" Phase 2 even if
+    // a later step below fails.
+    let ran = true;
 
     // 2. Ensure the memories root has a git baseline repository.
     if let Err(err) = prepare_memory_workspace(&root).await {
@@ -73,7 +122,10 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
             "failed_prepare_workspace",
         )
         .await;
-        return;
+        return Phase2Report {
+            ran,
+            changed: false,
+        };
     }
 
     // 3. Build the locked-down config used by the consolidation agent.
@@ -87,7 +139,10 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
             "failed_sandbox_policy",
         )
         .await;
-        return;
+        return Phase2Report {
+            ran,
+            changed: false,
+        };
     };
 
     // 4. Load current DB-backed Phase 2 inputs.
@@ -106,7 +161,10 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
                 "failed_load_stage1_outputs",
             )
             .await;
-            return;
+            return Phase2Report {
+                ran,
+                changed: false,
+            };
         }
     };
     let raw_memory_count = raw_memories.len();
@@ -122,7 +180,10 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
             "failed_sync_workspace_inputs",
         )
         .await;
-        return;
+        return Phase2Report {
+            ran,
+            changed: false,
+        };
     }
 
     // 6. Use git to decide whether the synced workspace actually changed.
@@ -137,7 +198,10 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
                 "failed_workspace_status",
             )
             .await;
-            return;
+            return Phase2Report {
+                ran,
+                changed: false,
+            };
         }
     };
     if !workspace_diff.has_changes() {
@@ -152,7 +216,10 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
             "succeeded_no_workspace_changes",
         )
         .await;
-        return;
+        return Phase2Report {
+            ran,
+            changed: false,
+        };
     }
 
     // 7. Persist the diff for the consolidation agent to inspect.
@@ -165,10 +232,19 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
             "failed_workspace_diff_file",
         )
         .await;
-        return;
+        return Phase2Report {
+            ran,
+            changed: false,
+        };
     }
 
-    // 8. Spawn the consolidation agent.
+    // 8. Snapshot the consolidation output artifacts before the agent runs, so completion can
+    // report whether consolidation actually changed committed memory content (distinct from
+    // whether the *inputs* to consolidation changed, which `workspace_diff` above already
+    // established).
+    let before_snapshot = consolidation_output_snapshot(&root).await;
+
+    // 9. Spawn the consolidation agent.
     let prompt = agent::get_prompt(&root);
     let agent = match context
         .spawn_consolidation_agent(agent_config, prompt)
@@ -178,26 +254,38 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
         Err(err) => {
             tracing::error!("failed to spawn global memory consolidation agent: {err}");
             job::failed(context.as_ref(), db.as_ref(), &claim, "failed_spawn_agent").await;
-            return;
+            return Phase2Report {
+                ran,
+                changed: false,
+            };
         }
     };
 
-    // 9. Hand off completion handling, heartbeats, and baseline reset.
-    agent::handle(
-        Arc::clone(&context),
-        claim,
-        new_watermark,
-        raw_memories.clone(),
-        root,
-        agent,
-        phase_two_e2e_timer,
-    );
-
-    // 10. Emit dispatch metrics.
+    // 10. Emit dispatch metrics now that the agent has been handed off, before awaiting
+    // completion below.
     let counters = Counters {
         input: raw_memory_count as i64,
     };
     emit_metrics(context.as_ref(), counters);
+
+    // 11. Run the consolidation agent to completion: heartbeats, baseline reset, and DB
+    // persistence. This is awaited (not spawned) so callers -- including a standalone
+    // memory-worker process with no long-lived session for an orphaned task to leak into --
+    // observe true completion rather than a fire-and-forget hand-off.
+    let changed = agent::run_to_completion(
+        context,
+        db,
+        claim,
+        new_watermark,
+        raw_memories,
+        root,
+        agent,
+        phase_two_e2e_timer,
+        before_snapshot,
+    )
+    .await;
+
+    Phase2Report { ran, changed }
 }
 
 async fn sync_phase2_workspace_inputs(
@@ -355,68 +443,73 @@ mod agent {
         }]
     }
 
-    /// Handle the agent while it is running.
+    /// Runs the consolidation agent to completion: heartbeats, final-status handling, workspace
+    /// baseline reset, and DB persistence. Returns whether consolidation actually changed the
+    /// committed memory content.
+    ///
+    /// This is `async` and must be awaited by the caller (as opposed to the fire-and-forget inner
+    /// `tokio::spawn` this replaced): a short-lived caller process (e.g. a standalone
+    /// memory-worker) exiting right after dispatching consolidation would otherwise kill this
+    /// task before consolidation, baseline reset, and DB persistence actually finished. The
+    /// terminal agent-shutdown cleanup below intentionally remains a detached `tokio::spawn`: it
+    /// is a best-effort resource cleanup, not something callers need to observe completion of.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn handle(
+    pub(super) async fn run_to_completion(
         context: Arc<MemoryStartupContext>,
+        db: Arc<StateRuntime>,
         claim: Claim,
         new_watermark: i64,
         selected_outputs: Vec<codex_state::Stage1Output>,
         memory_root: codex_utils_absolute_path::AbsolutePathBuf,
         agent: SpawnedConsolidationAgent,
         phase_two_e2e_timer: Option<codex_otel::Timer>,
-    ) {
-        let Some(db) = context.state_db() else {
-            return;
-        };
+        before_snapshot: ConsolidationOutputSnapshot,
+    ) -> bool {
+        let _phase_two_e2e_timer = phase_two_e2e_timer;
+        let SpawnedConsolidationAgent { thread_id, thread } = agent;
 
-        tokio::spawn(async move {
-            let _phase_two_e2e_timer = phase_two_e2e_timer;
-            let SpawnedConsolidationAgent { thread_id, thread } = agent;
+        // Loop the agent until we have the final status.
+        let final_status = loop_agent(db.clone(), claim.token.clone(), thread_id, &thread).await;
 
-            // Loop the agent until we have the final status.
-            let final_status =
-                loop_agent(db.clone(), claim.token.clone(), thread_id, &thread).await;
-
-            if matches!(final_status, AgentStatus::Completed(_)) {
-                if let Some(token_usage) = thread
-                    .token_usage_info()
-                    .await
-                    .map(|info| info.total_token_usage)
-                {
-                    emit_token_usage_metrics(context.as_ref(), &token_usage);
+        let changed = if matches!(final_status, AgentStatus::Completed(_)) {
+            if let Some(token_usage) = thread
+                .token_usage_info()
+                .await
+                .map(|info| info.total_token_usage)
+            {
+                emit_token_usage_metrics(context.as_ref(), &token_usage);
+            }
+            // Do not reset the workspace baseline if we lost the lock.
+            let still_owns_lock = match db
+                .memories()
+                .heartbeat_global_phase2_job(&claim.token, crate::stage_two::JOB_LEASE_SECONDS)
+                .await
+                .inspect_err(|err| {
+                    tracing::error!(
+                        "failed confirming global memory consolidation ownership before resetting workspace baseline: {err}"
+                    );
+                }) {
+                Ok(true) => true,
+                Ok(false) => {
+                    tracing::error!(
+                        "lost global memory consolidation ownership before resetting workspace baseline"
+                    );
+                    false
                 }
-                // Do not reset the workspace baseline if we lost the lock.
-                let still_owns_lock = match db
-                    .memories()
-                    .heartbeat_global_phase2_job(
-                        &claim.token,
-                        crate::stage_two::JOB_LEASE_SECONDS,
-                    )
-                    .await
-                    .inspect_err(|err| {
-                        tracing::error!(
-                            "failed confirming global memory consolidation ownership before resetting workspace baseline: {err}"
-                        );
-                    }) {
-                    Ok(true) => true,
-                    Ok(false) => {
-                        tracing::error!(
-                            "lost global memory consolidation ownership before resetting workspace baseline"
-                        );
-                        false
-                    }
-                    Err(_) => {
-                        job::failed(context.as_ref(), &db, &claim, "failed_confirm_ownership")
-                            .await;
-                        false
-                    }
-                };
-                if still_owns_lock {
-                    if let Err(err) = reset_memory_workspace_baseline(&memory_root).await {
-                        tracing::error!("failed resetting memory workspace baseline: {err}");
-                        job::failed(context.as_ref(), &db, &claim, "failed_workspace_commit").await;
-                    } else if !job::succeed(
+                Err(_) => {
+                    job::failed(context.as_ref(), &db, &claim, "failed_confirm_ownership").await;
+                    false
+                }
+            };
+            if still_owns_lock {
+                if let Err(err) = reset_memory_workspace_baseline(&memory_root).await {
+                    tracing::error!("failed resetting memory workspace baseline: {err}");
+                    job::failed(context.as_ref(), &db, &claim, "failed_workspace_commit").await;
+                    false
+                } else {
+                    let after_snapshot = consolidation_output_snapshot(&memory_root).await;
+                    let changed = before_snapshot != after_snapshot;
+                    if !job::succeed(
                         context.as_ref(),
                         &db,
                         &claim,
@@ -430,23 +523,27 @@ mod agent {
                             "failed marking global memory consolidation job succeeded after resetting workspace baseline"
                         );
                     }
+                    changed
                 }
             } else {
-                job::failed(context.as_ref(), &db, &claim, "failed_agent").await;
+                false
             }
+        } else {
+            job::failed(context.as_ref(), &db, &claim, "failed_agent").await;
+            false
+        };
 
-            let cleanup_context = Arc::clone(&context);
-            tokio::spawn(async move {
-                if let Err(err) = cleanup_context
-                    .shutdown_consolidation_agent(SpawnedConsolidationAgent { thread_id, thread })
-                    .await
-                {
-                    warn!(
-                        "failed to auto-close global memory consolidation agent {thread_id}: {err}"
-                    );
-                }
-            });
+        let cleanup_context = Arc::clone(&context);
+        tokio::spawn(async move {
+            if let Err(err) = cleanup_context
+                .shutdown_consolidation_agent(SpawnedConsolidationAgent { thread_id, thread })
+                .await
+            {
+                warn!("failed to auto-close global memory consolidation agent {thread_id}: {err}");
+            }
         });
+
+        changed
     }
 
     async fn loop_agent(
