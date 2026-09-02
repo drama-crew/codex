@@ -145,8 +145,8 @@ async fn phase1_never_claims_a_rollout_tagged_with_the_memory_worker_session_sou
 /// assertions below run immediately after the single `.await`, with no
 /// polling or retrying, to prove that.
 #[tokio::test]
-async fn run_memories_pipeline_awaits_phase2_to_completion_and_reports_stats()
--> anyhow::Result<()> {
+async fn run_memories_pipeline_awaits_phase2_to_completion_and_reports_stats() -> anyhow::Result<()>
+{
     let server = start_mock_server().await;
     let home = Arc::new(TempDir::new()?);
     let db = init_state_db(&home).await?;

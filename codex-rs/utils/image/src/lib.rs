@@ -235,9 +235,7 @@ fn load_for_prompt_bytes_uncached(
         // the EXIF Orientation tag lose their rotation hint. The upstream >MAX_DIMENSION
         // resize path already behaves this way; the passthrough_bytes threshold merely
         // widens the affected set.
-        if mode == PromptImageMode::ResizeToFit
-            && cfg.is_some()
-            && format != Some(ImageFormat::Gif)
+        if mode == PromptImageMode::ResizeToFit && cfg.is_some() && format != Some(ImageFormat::Gif)
         {
             let cfg = cfg.unwrap();
 
@@ -491,7 +489,11 @@ fn flatten_onto_white(image: &DynamicImage) -> DynamicImage {
     for (x, y, px) in rgba.enumerate_pixels() {
         let a = px.0[3] as u32;
         let blend = |c: u8| ((c as u32 * a + 255 * (255 - a)) / 255) as u8;
-        rgb.put_pixel(x, y, image::Rgb([blend(px.0[0]), blend(px.0[1]), blend(px.0[2])]));
+        rgb.put_pixel(
+            x,
+            y,
+            image::Rgb([blend(px.0[0]), blend(px.0[1]), blend(px.0[2])]),
+        );
     }
     DynamicImage::ImageRgb8(rgb)
 }

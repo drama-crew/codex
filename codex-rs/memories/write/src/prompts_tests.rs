@@ -93,19 +93,15 @@ fn stage_one_system_prompt_scopes_extraction_to_user_level_drama_preferences_in_
 
 #[test]
 fn build_stage_one_input_message_scopes_to_user_level_drama_preferences_and_preserves_placeholders()
- {
+{
     let model_info = model_info_from_slug("gpt-5.3-codex");
     let rollout_path = Path::new("/tmp/rollout-drama.jsonl");
     let rollout_cwd = Path::new("/tmp/drama-project");
     let rollout_contents = "unique-rollout-content-marker";
 
-    let message = build_stage_one_input_message(
-        &model_info,
-        rollout_path,
-        rollout_cwd,
-        rollout_contents,
-    )
-    .unwrap();
+    let message =
+        build_stage_one_input_message(&model_info, rollout_path, rollout_cwd, rollout_contents)
+            .unwrap();
 
     // All render variables must still be substituted.
     assert!(message.contains(&rollout_path.display().to_string()));
