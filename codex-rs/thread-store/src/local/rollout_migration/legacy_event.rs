@@ -229,6 +229,7 @@ pub(super) fn completed_item(
                 duration: Some(event.duration),
                 formatted_output: (!event.formatted_output.is_empty())
                     .then(|| event.formatted_output.clone()),
+                summary: None,
             }),
             Some(event.turn_id.clone()),
         )),

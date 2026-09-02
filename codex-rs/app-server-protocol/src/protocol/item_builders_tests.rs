@@ -105,6 +105,7 @@ fn guardian_stdin_reviews_preserve_parent_command_history() {
         parsed_cmd: vec![ParsedCommand::Unknown { cmd: "cat".into() }],
         source: ExecCommandSource::UnifiedExecStartup,
         interaction_input: None,
+        summary: None,
     };
     let start_turn = |turn_id: &str| {
         RolloutItem::EventMsg(EventMsg::TurnStarted(TurnStartedEvent {

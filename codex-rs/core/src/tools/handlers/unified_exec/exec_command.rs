@@ -286,6 +286,7 @@ impl ExecCommandHandler {
             additional_permissions,
             justification,
             prefix_rule,
+            summary,
             ..
         } = args;
         let completion_timeout = match self.lifetime {
@@ -410,6 +411,7 @@ impl ExecCommandHandler {
                 .permissions_preapproved,
             justification,
             prefix_rule,
+            summary,
         };
         let result = match completion_timeout {
             Some(timeout) => {

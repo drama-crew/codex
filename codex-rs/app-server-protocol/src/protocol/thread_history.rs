@@ -2243,6 +2243,7 @@ mod tests {
             exit_code: Some(0),
             duration: Some(Duration::from_millis(12)),
             formatted_output: Some("hello world\n".to_string()),
+            summary: None,
         });
         let events = vec![
             EventMsg::TurnStarted(TurnStartedEvent {
@@ -2264,6 +2265,7 @@ mod tests {
                 parsed_cmd: parsed_cmd.clone(),
                 source: ExecCommandSource::Agent,
                 interaction_input: None,
+                summary: None,
             }),
             EventMsg::ItemCompleted(ItemCompletedEvent {
                 thread_id,
