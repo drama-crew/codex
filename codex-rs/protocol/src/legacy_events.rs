@@ -171,6 +171,7 @@ impl CommandExecutionItem {
             parsed_cmd: self.parsed_cmd.clone(),
             source: self.source,
             interaction_input: self.interaction_input.clone(),
+            summary: self.summary.clone(),
         })
     }
 

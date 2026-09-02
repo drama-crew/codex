@@ -559,6 +559,7 @@ impl UnifiedExecProcessManager {
             ExecCommandSource::UnifiedExecStartup,
             Some(request.process_id.to_string()),
             plugin_attribution.clone(),
+            request.summary.clone(),
         );
         emitter.emit(event_ctx, ToolEventStage::Begin).await;
 

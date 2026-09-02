@@ -173,6 +173,7 @@ async fn emit_exec_command_begin(ctx: ToolEventCtx<'_>, exec_input: &ExecCommand
                 exit_code: None,
                 duration: None,
                 formatted_output: None,
+                summary: exec_input.summary.map(str::to_owned),
             }),
         )
         .await;
@@ -191,6 +192,7 @@ pub(crate) enum ToolEmitter {
         parsed_cmd: Vec<ParsedCommand>,
         process_id: Option<String>,
         plugin_attribution: Option<PluginCommandAttribution>,
+        summary: Option<String>,
     },
 }
 
@@ -213,6 +215,7 @@ impl ToolEmitter {
         source: ExecCommandSource,
         process_id: Option<String>,
         plugin_attribution: Option<PluginCommandAttribution>,
+        summary: Option<String>,
     ) -> Self {
         let parsed_cmd = parse_command(command);
         Self::UnifiedExec {
@@ -222,6 +225,7 @@ impl ToolEmitter {
             parsed_cmd,
             process_id,
             plugin_attribution,
+            summary,
         }
     }
 
@@ -343,6 +347,7 @@ impl ToolEmitter {
                     parsed_cmd,
                     process_id,
                     plugin_attribution,
+                    summary,
                 },
                 stage,
             ) => {
@@ -356,6 +361,7 @@ impl ToolEmitter {
                         /*interaction_input*/ None,
                         process_id.as_deref(),
                         plugin_attribution.as_ref(),
+                        summary.as_deref(),
                     ),
                     stage,
                 )
@@ -468,6 +474,7 @@ struct ExecCommandInput<'a> {
     interaction_input: Option<&'a str>,
     process_id: Option<&'a str>,
     plugin_attribution: Option<&'a PluginCommandAttribution>,
+    summary: Option<&'a str>,
 }
 
 impl<'a> ExecCommandInput<'a> {
@@ -479,6 +486,7 @@ impl<'a> ExecCommandInput<'a> {
         interaction_input: Option<&'a str>,
         process_id: Option<&'a str>,
         plugin_attribution: Option<&'a PluginCommandAttribution>,
+        summary: Option<&'a str>,
     ) -> Self {
         Self {
             command,
@@ -488,6 +496,7 @@ impl<'a> ExecCommandInput<'a> {
             interaction_input,
             process_id,
             plugin_attribution,
+            summary,
         }
     }
 }
@@ -586,6 +595,7 @@ async fn emit_exec_end(
                 exit_code: Some(exec_result.exit_code),
                 duration: Some(exec_result.duration),
                 formatted_output: Some(exec_result.formatted_output),
+                summary: exec_input.summary.map(str::to_owned),
             }),
         )
         .await;
@@ -847,5 +857,40 @@ mod tests {
                 break;
             }
         }
+    }
+
+    #[tokio::test]
+    async fn unified_exec_begin_surfaces_model_authored_summary() {
+        let (session, turn, rx_event) =
+            make_session_and_context_with_dynamic_tools_and_rx(Vec::new()).await;
+        let dir = tempdir().expect("tempdir");
+        let cwd = PathUri::from_host_native_path(dir.path()).expect("absolute cwd");
+
+        let emitter = ToolEmitter::unified_exec(
+            &["echo".to_string(), "hi".to_string()],
+            cwd,
+            ExecCommandSource::UnifiedExecStartup,
+            Some("process-1".to_string()),
+            /*plugin_attribution*/ None,
+            Some("Echoes a greeting".to_string()),
+        );
+        emitter
+            .begin(ToolEventCtx::new(
+                session.as_ref(),
+                turn.as_ref(),
+                "call-id",
+                /*turn_diff_tracker*/ None,
+            ))
+            .await;
+
+        let started = rx_event.recv().await.expect("item started event");
+        let summary = match started.msg {
+            EventMsg::ItemStarted(event) => match event.item {
+                TurnItem::CommandExecution(CommandExecutionItem { summary, .. }) => summary,
+                other => panic!("unexpected item: {other:?}"),
+            },
+            other => panic!("unexpected event: {other:?}"),
+        };
+        assert_eq!(summary.as_deref(), Some("Echoes a greeting"));
     }
 }
