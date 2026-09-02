@@ -40,12 +40,13 @@ enum JobOutcome {
     Failed,
 }
 
-struct Stats {
-    claimed: usize,
-    succeeded_with_output: usize,
-    succeeded_no_output: usize,
-    failed: usize,
-    total_token_usage: Option<TokenUsage>,
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Stats {
+    pub(crate) claimed: usize,
+    pub(crate) succeeded_with_output: usize,
+    pub(crate) succeeded_no_output: usize,
+    pub(crate) failed: usize,
+    pub(crate) total_token_usage: Option<TokenUsage>,
 }
 
 /// Phase 1 model output payload.
@@ -68,14 +69,17 @@ struct StageOneOutput {
 /// 2) build one stage-1 request context
 /// 3) run stage-1 extraction jobs in parallel
 /// 4) emit metrics and logs
-pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
+///
+/// Returns aggregate [`Stats`] for the run so callers (both the fire-and-forget session-startup
+/// task and the awaitable `run_memories_pipeline`) can report what happened.
+pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) -> Stats {
     let stage_one_context = build_request_context(context.as_ref(), config.as_ref()).await;
     let _phase_one_e2e_timer = stage_one_context.start_timer(MEMORY_PHASE_ONE_E2E_MS);
 
     // 1. Claim startup job.
     let Some(claimed_candidates) = claim_startup_jobs(context.as_ref(), &config.memories).await
     else {
-        return;
+        return Stats::default();
     };
     if claimed_candidates.is_empty() {
         stage_one_context.counter(
@@ -83,7 +87,7 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
             /*inc*/ 1,
             &[("status", "skipped_no_candidates")],
         );
-        return;
+        return Stats::default();
     }
 
     // 3. Run the parallel sampling.
@@ -106,6 +110,7 @@ pub async fn run(context: Arc<MemoryStartupContext>, config: Arc<Config>) {
         counts.succeeded_no_output,
         counts.failed
     );
+    counts
 }
 
 /// Prune old un-used "dead" raw memories.
