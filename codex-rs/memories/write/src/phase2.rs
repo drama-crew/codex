@@ -44,18 +44,59 @@ struct Counters {
     input: i64,
 }
 
+/// Outcome of one run of [`run`].
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct Phase2Report {
+    /// Whether this run held the global Phase 2 job lock and attempted a consolidation pass.
+    pub(crate) ran: bool,
+    /// Whether consolidation actually changed the committed memory content (`MEMORY.md` /
+    /// `memory_summary.md`), derived from a before/after content snapshot around the
+    /// consolidation agent run -- not from `workspace_diff.has_changes()`, which only reflects
+    /// consolidation *input* changes.
+    pub(crate) changed: bool,
+}
+
+/// Snapshot of the consolidation agent's documented output artifacts (`MEMORY.md` /
+/// `memory_summary.md`), used to derive whether a consolidation run actually changed anything.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ConsolidationOutputSnapshot {
+    memory_md: Option<String>,
+    memory_summary_md: Option<String>,
+}
+
+async fn consolidation_output_snapshot(root: &Path) -> ConsolidationOutputSnapshot {
+    ConsolidationOutputSnapshot {
+        memory_md: read_optional_file_string(&root.join("MEMORY.md")).await,
+        memory_summary_md: read_optional_file_string(&root.join("memory_summary.md")).await,
+    }
+}
+
+async fn read_optional_file_string(path: &Path) -> Option<String> {
+    match tokio::fs::read_to_string(path).await {
+        Ok(contents) => Some(contents),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
+        Err(err) => {
+            tracing::warn!(
+                "failed reading {} for consolidation output snapshot: {err}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
 /// Runs memory phase 2 (aka consolidation) in strict order. The method represents the linear
 /// flow of the consolidation phase.
 pub async fn run(
     context: Arc<MemoryStartupContext>,
     config: Arc<Config>,
     parent_permission_profile: PermissionProfile,
-) {
+) -> Phase2Report {
     let phase_two_e2e_timer = context.start_timer(MEMORY_PHASE_TWO_E2E_MS);
 
     let Some(db) = context.state_db() else {
         // This should not happen.
-        return;
+        return Phase2Report::default();
     };
     let root = memory_root(&config.codex_home);
     let max_raw_memories = config.memories.max_raw_memories_for_consolidation;
@@ -66,9 +107,10 @@ pub async fn run(
         Ok(claim) => claim,
         Err(e) => {
             context.counter(MEMORY_PHASE_TWO_JOBS, /*inc*/ 1, &[("status", e)]);
-            return;
+            return Phase2Report::default();
         }
     };
+    let ran = true;
 
     // 2. Ensure the memories root has a git baseline repository.
     if let Err(err) = prepare_memory_workspace(&root).await {
@@ -80,7 +122,10 @@ pub async fn run(
             "failed_prepare_workspace",
         )
         .await;
-        return;
+        return Phase2Report {
+            ran,
+            changed: false,
+        };
     }
 
     // 3. Build the locked-down config used by the consolidation agent.
@@ -98,7 +143,10 @@ pub async fn run(
             "failed_sandbox_policy",
         )
         .await;
-        return;
+        return Phase2Report {
+            ran,
+            changed: false,
+        };
     };
 
     // 4. Load current DB-backed Phase 2 inputs.
@@ -117,7 +165,10 @@ pub async fn run(
                 "failed_load_stage1_outputs",
             )
             .await;
-            return;
+            return Phase2Report {
+                ran,
+                changed: false,
+            };
         }
     };
     let raw_memory_count = raw_memories.len();
@@ -133,7 +184,10 @@ pub async fn run(
             "failed_sync_workspace_inputs",
         )
         .await;
-        return;
+        return Phase2Report {
+            ran,
+            changed: false,
+        };
     }
 
     // 6. Use git to decide whether the synced workspace actually changed.
@@ -148,7 +202,10 @@ pub async fn run(
                 "failed_workspace_status",
             )
             .await;
-            return;
+            return Phase2Report {
+                ran,
+                changed: false,
+            };
         }
     };
     if !workspace_diff.has_changes() && validate_consolidation_artifacts(&root).await.is_ok() {
@@ -163,7 +220,10 @@ pub async fn run(
             "succeeded_no_workspace_changes",
         )
         .await;
-        return;
+        return Phase2Report {
+            ran,
+            changed: false,
+        };
     }
 
     // 7. Persist the diff for the consolidation agent to inspect.
@@ -176,10 +236,14 @@ pub async fn run(
             "failed_workspace_diff_file",
         )
         .await;
-        return;
+        return Phase2Report {
+            ran,
+            changed: false,
+        };
     }
 
-    // 8. Spawn the consolidation agent.
+    // 8. Snapshot the consolidation output artifacts before spawning the agent, and spawn it.
+    let before_snapshot = consolidation_output_snapshot(&root).await;
     let prompt = agent::get_prompt(&root);
     let agent = match context
         .spawn_consolidation_agent(agent_config, prompt)
@@ -189,26 +253,34 @@ pub async fn run(
         Err(err) => {
             tracing::error!("failed to spawn global memory consolidation agent: {err}");
             job::failed(context.as_ref(), db.as_ref(), &claim, "failed_spawn_agent").await;
-            return;
+            return Phase2Report {
+                ran,
+                changed: false,
+            };
         }
     };
 
-    // 9. Hand off completion handling, heartbeats, and baseline reset.
-    agent::handle(
-        Arc::clone(&context),
-        claim,
-        new_watermark,
-        raw_memories.clone(),
-        root,
-        agent,
-        phase_two_e2e_timer,
-    );
-
-    // 10. Emit dispatch metrics.
+    // 9. Emit dispatch metrics.
     let counters = Counters {
         input: raw_memory_count as i64,
     };
     emit_metrics(context.as_ref(), counters);
+
+    // 10. Await completion handling, heartbeats, and baseline reset.
+    let changed = agent::run_to_completion(
+        context,
+        db,
+        claim,
+        new_watermark,
+        raw_memories,
+        root,
+        agent,
+        phase_two_e2e_timer,
+        before_snapshot,
+    )
+    .await;
+
+    Phase2Report { ran, changed }
 }
 
 async fn sync_phase2_workspace_inputs(
@@ -377,95 +449,97 @@ mod agent {
         }]
     }
 
-    /// Handle the agent while it is running.
+    /// Awaits the agent through completion, heartbeats, artifact validation, and (on success)
+    /// workspace baseline reset and DB persistence.
+    ///
+    /// Returns whether consolidation actually changed the committed memory content, derived from
+    /// a before/after snapshot of `MEMORY.md` / `memory_summary.md` (`before_snapshot`, taken by
+    /// the caller before the agent was spawned, versus a snapshot taken here after a successful
+    /// baseline reset) -- not from `workspace_diff.has_changes()`, which only reflects
+    /// consolidation *input* changes.
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn handle(
+    pub(super) async fn run_to_completion(
         context: Arc<MemoryStartupContext>,
+        db: Arc<StateRuntime>,
         claim: Claim,
         new_watermark: i64,
         selected_outputs: Vec<codex_state::Stage1Output>,
         memory_root: codex_utils_absolute_path::AbsolutePathBuf,
         agent: SpawnedConsolidationAgent,
         phase_two_e2e_timer: Option<codex_otel::Timer>,
-    ) {
-        let Some(db) = context.state_db() else {
-            return;
+        before_snapshot: ConsolidationOutputSnapshot,
+    ) -> bool {
+        let _phase_two_e2e_timer = phase_two_e2e_timer;
+        let SpawnedConsolidationAgent { thread_id, thread } = agent;
+
+        // Loop the agent until we have the final status.
+        let final_status = loop_agent(db.clone(), claim.token.clone(), thread_id, &thread).await;
+
+        let agent_completed = matches!(final_status, AgentStatus::Completed(_));
+        if agent_completed
+            && let Some(token_usage) = thread
+                .token_usage_info()
+                .await
+                .map(|info| info.total_token_usage)
+        {
+            emit_token_usage_metrics(context.as_ref(), &token_usage);
+        }
+
+        if let Err(err) = context
+            .shutdown_consolidation_agent(SpawnedConsolidationAgent { thread_id, thread })
+            .await
+        {
+            warn!("failed to auto-close global memory consolidation agent {thread_id}: {err}");
+            // Keep the existing lease until it expires so another worker cannot race a
+            // consolidation agent whose shutdown has not completed.
+            return false;
+        }
+
+        let artifacts_valid = if agent_completed {
+            match validate_consolidation_artifacts(&memory_root).await {
+                Ok(()) => true,
+                Err(err) => {
+                    tracing::error!("memory consolidation artifacts are invalid: {err}");
+                    job::failed(context.as_ref(), &db, &claim, "failed_invalid_artifacts").await;
+                    false
+                }
+            }
+        } else {
+            false
         };
 
-        tokio::spawn(async move {
-            let _phase_two_e2e_timer = phase_two_e2e_timer;
-            let SpawnedConsolidationAgent { thread_id, thread } = agent;
-
-            // Loop the agent until we have the final status.
-            let final_status =
-                loop_agent(db.clone(), claim.token.clone(), thread_id, &thread).await;
-
-            let agent_completed = matches!(final_status, AgentStatus::Completed(_));
-            if agent_completed
-                && let Some(token_usage) = thread
-                    .token_usage_info()
-                    .await
-                    .map(|info| info.total_token_usage)
-            {
-                emit_token_usage_metrics(context.as_ref(), &token_usage);
-            }
-
-            if let Err(err) = context
-                .shutdown_consolidation_agent(SpawnedConsolidationAgent { thread_id, thread })
+        if agent_completed && artifacts_valid {
+            // Do not reset the workspace baseline if we lost the lock.
+            let still_owns_lock = match db
+                .memories()
+                .heartbeat_global_phase2_job(&claim.token, crate::stage_two::JOB_LEASE_SECONDS)
                 .await
-            {
-                warn!("failed to auto-close global memory consolidation agent {thread_id}: {err}");
-                // Keep the existing lease until it expires so another worker cannot race a
-                // consolidation agent whose shutdown has not completed.
-                return;
-            }
-
-            let artifacts_valid = if agent_completed {
-                match validate_consolidation_artifacts(&memory_root).await {
-                    Ok(()) => true,
-                    Err(err) => {
-                        tracing::error!("memory consolidation artifacts are invalid: {err}");
-                        job::failed(context.as_ref(), &db, &claim, "failed_invalid_artifacts")
-                            .await;
-                        false
-                    }
+                .inspect_err(|err| {
+                    tracing::error!(
+                        "failed confirming global memory consolidation ownership before resetting workspace baseline: {err}"
+                    );
+                }) {
+                Ok(true) => true,
+                Ok(false) => {
+                    tracing::error!(
+                        "lost global memory consolidation ownership before resetting workspace baseline"
+                    );
+                    false
                 }
-            } else {
-                false
+                Err(_) => {
+                    job::failed(context.as_ref(), &db, &claim, "failed_confirm_ownership").await;
+                    false
+                }
             };
-
-            if agent_completed && artifacts_valid {
-                // Do not reset the workspace baseline if we lost the lock.
-                let still_owns_lock = match db
-                    .memories()
-                    .heartbeat_global_phase2_job(
-                        &claim.token,
-                        crate::stage_two::JOB_LEASE_SECONDS,
-                    )
-                    .await
-                    .inspect_err(|err| {
-                        tracing::error!(
-                            "failed confirming global memory consolidation ownership before resetting workspace baseline: {err}"
-                        );
-                    }) {
-                    Ok(true) => true,
-                    Ok(false) => {
-                        tracing::error!(
-                            "lost global memory consolidation ownership before resetting workspace baseline"
-                        );
-                        false
-                    }
-                    Err(_) => {
-                        job::failed(context.as_ref(), &db, &claim, "failed_confirm_ownership")
-                            .await;
-                        false
-                    }
-                };
-                if still_owns_lock {
-                    if let Err(err) = reset_memory_workspace_baseline(&memory_root).await {
-                        tracing::error!("failed resetting memory workspace baseline: {err}");
-                        job::failed(context.as_ref(), &db, &claim, "failed_workspace_commit").await;
-                    } else if !job::succeed(
+            if still_owns_lock {
+                if let Err(err) = reset_memory_workspace_baseline(&memory_root).await {
+                    tracing::error!("failed resetting memory workspace baseline: {err}");
+                    job::failed(context.as_ref(), &db, &claim, "failed_workspace_commit").await;
+                    false
+                } else {
+                    let after_snapshot = consolidation_output_snapshot(&memory_root).await;
+                    let changed = before_snapshot != after_snapshot;
+                    if !job::succeed(
                         context.as_ref(),
                         &db,
                         &claim,
@@ -479,14 +553,22 @@ mod agent {
                             "failed marking global memory consolidation job succeeded after resetting workspace baseline"
                         );
                     }
+                    changed
                 }
-            } else if !agent_completed {
-                if let Err(err) = remove_memory_symlinks(&memory_root).await {
-                    tracing::error!("failed removing memory workspace symbolic links: {err}");
-                }
-                job::failed(context.as_ref(), &db, &claim, "failed_agent").await;
+            } else {
+                false
             }
-        });
+        } else if !agent_completed {
+            if let Err(err) = remove_memory_symlinks(&memory_root).await {
+                tracing::error!("failed removing memory workspace symbolic links: {err}");
+            }
+            job::failed(context.as_ref(), &db, &claim, "failed_agent").await;
+            false
+        } else {
+            // agent_completed but artifacts_valid == false: `job::failed(...,
+            // "failed_invalid_artifacts")` was already recorded above when validating artifacts.
+            false
+        }
     }
 
     async fn loop_agent(
