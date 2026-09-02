@@ -171,7 +171,7 @@ pub fn load_for_prompt_bytes_with(
         return Ok(image);
     }
 
-    let image = load_for_prompt_bytes_uncached(&path_buf, file_bytes, mode)?;
+    let image = load_for_prompt_bytes_uncached(&path_buf, file_bytes, mode, cfg)?;
     cache_image(&IMAGE_CACHE, key, image.clone(), MAX_IMAGE_CACHE_BYTES);
     Ok(image)
 }
@@ -180,6 +180,7 @@ fn load_for_prompt_bytes_uncached(
     path: &Path,
     file_bytes: Vec<u8>,
     mode: PromptImageMode,
+    cfg: Option<&PromptImageRecodeConfig>,
 ) -> Result<EncodedImage, ImageProcessingError> {
     let path_buf = path.to_path_buf();
     (move || {
@@ -238,6 +239,8 @@ fn load_for_prompt_bytes_uncached(
                 return Ok(EncodedImage {
                     bytes: file_bytes.into(),
                     mime,
+                    source_width: width,
+                    source_height: height,
                     width,
                     height,
                 });
@@ -259,6 +262,8 @@ fn load_for_prompt_bytes_uncached(
                 return Ok(EncodedImage {
                     bytes: buffer.into(),
                     mime: "image/jpeg".to_string(),
+                    source_width: width,
+                    source_height: height,
                     width: rgb.width(),
                     height: rgb.height(),
                 });
@@ -359,7 +364,14 @@ pub fn load_data_url_for_prompt_uncached(
     image_url: &str,
     mode: PromptImageMode,
 ) -> Result<EncodedImage, ImageProcessingError> {
-    load_data_url_for_prompt_with(image_url, mode, load_for_prompt_bytes_uncached)
+    // Drama: mirror `load_for_prompt_bytes`'s env-gated recode config so data-URL
+    // prompt images get the same treatment as file-backed ones. With no
+    // `DRAMA_PROMPT_IMAGE_*` vars set this is `None` and upstream behaviour is
+    // preserved byte-for-byte.
+    let cfg = PromptImageRecodeConfig::from_env();
+    load_data_url_for_prompt_with(image_url, mode, |path, bytes, mode| {
+        load_for_prompt_bytes_uncached(path, bytes, mode, cfg.as_ref())
+    })
 }
 
 fn load_data_url_for_prompt_with(
