@@ -40,6 +40,16 @@ fn exec_command_tool_matches_expected_spec() {
             "cmd".to_string(),
             JsonSchema::string(Some("Shell command to execute.".to_string())),
         ),
+        // Drama: model-authored one-line summary, surfaced as the ACP tool-call
+        // title so the behind-the-scenes log reads as a sentence instead of a
+        // translated command verb.
+        (
+            "summary".to_string(),
+            JsonSchema::string(Some(
+                "Optional one-line, user-language summary of what this command does, for display."
+                    .to_string(),
+            )),
+        ),
         (
             "workdir".to_string(),
             JsonSchema::string(Some(
