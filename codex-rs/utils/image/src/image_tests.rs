@@ -384,9 +384,20 @@ fn recode_large_png_to_jpeg_within_max_dim() {
         image::Rgba([(x % 251) as u8, (y % 241) as u8, ((x + y) % 253) as u8, 255])
     }));
     let mut png = Vec::new();
-    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
-    let cfg = PromptImageRecodeConfig { jpeg_quality: 90, max_dim: 2048, passthrough_bytes: 1024 };
-    let out = load_for_prompt_bytes_with(Path::new("t.png"), png.clone(), PromptImageMode::ResizeToFit, Some(&cfg)).unwrap();
+    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .unwrap();
+    let cfg = PromptImageRecodeConfig {
+        jpeg_quality: 90,
+        max_dim: 2048,
+        passthrough_bytes: 1024,
+    };
+    let out = load_for_prompt_bytes_with(
+        Path::new("t.png"),
+        png.clone(),
+        PromptImageMode::ResizeToFit,
+        Some(&cfg),
+    )
+    .unwrap();
     assert_eq!(out.mime, "image/jpeg");
     assert!(out.bytes.len() < png.len());
     assert_eq!((out.width, out.height), (1200, 900));
@@ -394,11 +405,26 @@ fn recode_large_png_to_jpeg_within_max_dim() {
 
 #[test]
 fn passthrough_small_image_untouched() {
-    let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(64, 64, image::Rgba([1, 2, 3, 255])));
+    let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        64,
+        64,
+        image::Rgba([1, 2, 3, 255]),
+    ));
     let mut png = Vec::new();
-    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
-    let cfg = PromptImageRecodeConfig { jpeg_quality: 90, max_dim: 2048, passthrough_bytes: 512 * 1024 };
-    let out = load_for_prompt_bytes_with(Path::new("t.png"), png.clone(), PromptImageMode::ResizeToFit, Some(&cfg)).unwrap();
+    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .unwrap();
+    let cfg = PromptImageRecodeConfig {
+        jpeg_quality: 90,
+        max_dim: 2048,
+        passthrough_bytes: 512 * 1024,
+    };
+    let out = load_for_prompt_bytes_with(
+        Path::new("t.png"),
+        png.clone(),
+        PromptImageMode::ResizeToFit,
+        Some(&cfg),
+    )
+    .unwrap();
     assert_eq!(out.mime, "image/png");
     assert_eq!(out.bytes.as_ref(), png.as_slice()); // 原字节直通
 }
@@ -409,9 +435,20 @@ fn recode_resizes_above_max_dim() {
         image::Rgba([(x % 255) as u8, 0, 0, 255])
     }));
     let mut png = Vec::new();
-    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
-    let cfg = PromptImageRecodeConfig { jpeg_quality: 90, max_dim: 1536, passthrough_bytes: 1024 };
-    let out = load_for_prompt_bytes_with(Path::new("t.png"), png, PromptImageMode::ResizeToFit, Some(&cfg)).unwrap();
+    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .unwrap();
+    let cfg = PromptImageRecodeConfig {
+        jpeg_quality: 90,
+        max_dim: 1536,
+        passthrough_bytes: 1024,
+    };
+    let out = load_for_prompt_bytes_with(
+        Path::new("t.png"),
+        png,
+        PromptImageMode::ResizeToFit,
+        Some(&cfg),
+    )
+    .unwrap();
     assert_eq!(out.mime, "image/jpeg");
     assert!(out.width <= 1536 && out.height <= 1536);
 }
@@ -422,9 +459,20 @@ fn original_mode_ignores_recode_config() {
         image::Rgba([(x % 251) as u8, (y % 241) as u8, 7, 255])
     }));
     let mut png = Vec::new();
-    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
-    let cfg = PromptImageRecodeConfig { jpeg_quality: 90, max_dim: 512, passthrough_bytes: 1 };
-    let out = load_for_prompt_bytes_with(Path::new("t.png"), png.clone(), PromptImageMode::Original, Some(&cfg)).unwrap();
+    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .unwrap();
+    let cfg = PromptImageRecodeConfig {
+        jpeg_quality: 90,
+        max_dim: 512,
+        passthrough_bytes: 1,
+    };
+    let out = load_for_prompt_bytes_with(
+        Path::new("t.png"),
+        png.clone(),
+        PromptImageMode::Original,
+        Some(&cfg),
+    )
+    .unwrap();
     assert_eq!(out.mime, "image/png");
     assert_eq!(out.bytes.as_ref(), png.as_slice());
 }
@@ -436,22 +484,48 @@ fn no_config_matches_upstream_behavior() {
         image::Rgba([(x % 251) as u8, (y % 241) as u8, 9, 255])
     }));
     let mut png = Vec::new();
-    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
-    let out = load_for_prompt_bytes_with(Path::new("t.png"), png.clone(), PromptImageMode::ResizeToFit, None).unwrap();
+    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .unwrap();
+    let out = load_for_prompt_bytes_with(
+        Path::new("t.png"),
+        png.clone(),
+        PromptImageMode::ResizeToFit,
+        None,
+    )
+    .unwrap();
     assert_eq!(out.bytes.as_ref(), png.as_slice());
 }
 
 #[test]
 fn alpha_flattened_onto_white() {
     // 全透明像素 → 重编码后应为白色（JPEG 无 alpha）
-    let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(900, 900, image::Rgba([255, 0, 0, 0])));
+    let img = image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+        900,
+        900,
+        image::Rgba([255, 0, 0, 0]),
+    ));
     let mut png = Vec::new();
-    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png).unwrap();
-    let cfg = PromptImageRecodeConfig { jpeg_quality: 90, max_dim: 2048, passthrough_bytes: 1 };
-    let out = load_for_prompt_bytes_with(Path::new("t.png"), png, PromptImageMode::ResizeToFit, Some(&cfg)).unwrap();
+    img.write_to(&mut Cursor::new(&mut png), ImageFormat::Png)
+        .unwrap();
+    let cfg = PromptImageRecodeConfig {
+        jpeg_quality: 90,
+        max_dim: 2048,
+        passthrough_bytes: 1,
+    };
+    let out = load_for_prompt_bytes_with(
+        Path::new("t.png"),
+        png,
+        PromptImageMode::ResizeToFit,
+        Some(&cfg),
+    )
+    .unwrap();
     let decoded = image::load_from_memory(&out.bytes).unwrap().to_rgb8();
     let p = decoded.get_pixel(450, 450);
-    assert!(p.0[0] > 245 && p.0[1] > 245 && p.0[2] > 245, "expected white, got {:?}", p);
+    assert!(
+        p.0[0] > 245 && p.0[1] > 245 && p.0[2] > 245,
+        "expected white, got {:?}",
+        p
+    );
 }
 
 // ---- drama: from_env test (serialize env access with a global mutex) ----
@@ -482,10 +556,12 @@ fn from_env_single_var_returns_some_with_defaults() {
     }
     let cfg = PromptImageRecodeConfig::from_env().expect("should be Some when any var set");
     assert_eq!(cfg.jpeg_quality, 75);
-    assert_eq!(cfg.max_dim, 2048);          // default
+    assert_eq!(cfg.max_dim, 2048); // default
     assert_eq!(cfg.passthrough_bytes, 512 * 1024); // default
     // SAFETY: cleanup.
-    unsafe { std::env::remove_var("DRAMA_PROMPT_IMAGE_JPEG_QUALITY"); }
+    unsafe {
+        std::env::remove_var("DRAMA_PROMPT_IMAGE_JPEG_QUALITY");
+    }
 }
 
 #[test]
@@ -510,13 +586,9 @@ fn gif_bypasses_recode_even_with_config() {
         Some(&cfg),
     )
     .unwrap();
-    let upstream = load_for_prompt_bytes_with(
-        Path::new("t2.gif"),
-        gif,
-        PromptImageMode::ResizeToFit,
-        None,
-    )
-    .unwrap();
+    let upstream =
+        load_for_prompt_bytes_with(Path::new("t2.gif"), gif, PromptImageMode::ResizeToFit, None)
+            .unwrap();
     assert_ne!(with_cfg.mime, "image/jpeg");
     assert_eq!(with_cfg.mime, upstream.mime);
     assert_eq!(with_cfg.bytes, upstream.bytes);
