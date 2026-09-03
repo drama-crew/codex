@@ -21,7 +21,14 @@
 use super::psuedocon::HPCON;
 use anyhow::Error;
 use anyhow::ensure;
-use std::ffi::c_void;
+// Drama: this must be winapi's `c_void`, not `std::ffi::c_void`. `update` sits
+// between two winapi types -- its `set_pty` caller passes an `HPCON`
+// (= winapi `HANDLE` = `*mut winapi::ctypes::c_void`) and it forwards straight
+// into `UpdateProcThreadAttribute`, which also takes winapi's. Declaring the
+// parameter as `std::ffi::c_void` makes both ends mismatch, and the two types
+// are distinct to rustc despite the identical name. Only the Windows target
+// compiles this module, so the breakage is invisible on macOS/Linux builds.
+use winapi::ctypes::c_void;
 use std::io::Error as IoError;
 use std::mem;
 use std::ptr;
