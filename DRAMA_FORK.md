@@ -7,8 +7,12 @@ Fork of **openai/codex**, maintained for the **Drama platform**.
 - `main` is the canonical Drama fork and the branch consumed by downstream
   projects. It is based on upstream tag **`rust-v0.144.3`** and contains the
   maintained Drama summary, image, and memory patches.
-- `drama/test-0.152` is the **in-flight upgrade branch**: the same Drama
-  patches replayed onto upstream tag **`rust-v0.152.1`**. It is consumed only
+- `drama/test-main` is the **current in-flight upgrade branch**: the same Drama
+  patches replayed onto upstream **`main`** (not a release tag — deliberately,
+  to pick up the newest upstream work; the trade-off is that main has not been
+  through upstream's release process).
+- `drama/test-0.152` is the previous upgrade branch: the same patches on
+  upstream tag **`rust-v0.152.1`**. It is consumed only
   by `drama-crew/codex-acp`'s matching `drama/test-0.152` branch and, through
   it, by the test environment and the `Causyn-beta` desktop build. It is
   deliberately **not** merged into `main` until the test environment has been
